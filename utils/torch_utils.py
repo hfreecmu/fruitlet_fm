@@ -21,3 +21,10 @@ def save_checkpoint(epoch, checkpoint_dir, feature_model, transformer_model):
 
     torch.save(feature_model.state_dict(), feature_path)
     torch.save(transformer_model.state_dict(), transformer_path)
+
+def load_checkpoint(epoch, checkpoint_dir, feature_model, transformer_model):
+    feature_path = os.path.join(checkpoint_dir, 'epoch_%d_feature.pth' % epoch)
+    transformer_path = os.path.join(checkpoint_dir, 'epoch_%d_transformer.pth' % epoch)
+
+    feature_model.load_state_dict(torch.load(feature_path))
+    transformer_model.load_state_dict(torch.load(transformer_path))

@@ -113,3 +113,21 @@ def load_feature_encoder(dims, strides, device, eval=False):
     encoder.to(device)
 
     return encoder
+
+def arange_like(x, dim: int):
+    return x.new_ones(x.shape[dim]).cumsum(0) - 1  # traceable in 1.1
+
+def extract_matches(scores, match_threshold):
+    max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
+    indices0, indices1 = max0.indices, max1.indices
+    mutual0 = arange_like(indices0, 1)[None] == indices1.gather(1, indices0)
+    mutual1 = arange_like(indices1, 1)[None] == indices0.gather(1, indices1)
+    zero = scores.new_tensor(0)
+    mscores0 = torch.where(mutual0, max0.values.exp(), zero)
+    mscores1 = torch.where(mutual1, mscores0.gather(1, indices1), zero)
+    valid0 = mutual0 & (mscores0 > match_threshold)
+    valid1 = mutual1 & valid0.gather(1, indices1)
+    indices_0 = torch.where(valid0, indices0, indices0.new_tensor(-1))
+    indices_1 = torch.where(valid1, indices1, indices1.new_tensor(-1))
+
+    return indices_0, indices_1
