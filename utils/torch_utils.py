@@ -1,3 +1,4 @@
+import os
 import torch
 import cv2
 import numpy as np
@@ -13,3 +14,10 @@ def load_torch_image(imfile, rand_flip):
 
     img = torch.from_numpy(im).permute(2, 0, 1)
     return img[None], im, flip
+
+def save_checkpoint(epoch, checkpoint_dir, feature_model, transformer_model):
+    feature_path = os.path.join(checkpoint_dir, 'epoch_%d_feature.pth' % epoch)
+    transformer_path = os.path.join(checkpoint_dir, 'epoch_%d_transformer.pth' % epoch)
+
+    torch.save(feature_model.state_dict(), feature_path)
+    torch.save(transformer_model.state_dict(), transformer_path)
