@@ -96,8 +96,9 @@ def infer(opt):
             
             #part where I stopped copying
             #TODO this will dustbin match so maybe modify extract matches
-            indices_0, indices_1 = extract_matches(scores, opt.match_threshold)
+            indices_0, indices_1, mscores_0, _ = extract_matches(scores, opt.match_threshold)
             indices_0, indices_1 = indices_0.cpu(), indices_1.cpu()
+            mscores_0 = mscores_0.cpu()
             
             for image_ind in range(num_images):
                 has_match_i = (indices_0[image_ind] != -1)
@@ -106,7 +107,14 @@ def infer(opt):
                 matched_inds_j = indices_0[image_ind, has_match_i]
 
                 im_0_inds =  seg_inds_0_orig[image_ind, matched_inds_i]
-                im_1_inds = seg_inds_1_orig[image_ind, matched_inds_j]              
+                im_1_inds = seg_inds_1_orig[image_ind, matched_inds_j] 
+                matching_scores = mscores_0[image_ind, matched_inds_i]
+
+                if im_0_inds.shape[0] > opt.top_n:
+                    sorted_score_inds = torch.argsort(-matching_scores)[0:opt.top_n]
+                    im_0_inds = im_0_inds[sorted_score_inds]
+                    im_1_inds = im_1_inds[sorted_score_inds]
+                    matching_scores = matching_scores[sorted_score_inds]
                 
                 output_path = os.path.join(opt.vis_dir, 'debug_im.png')
                 vis(torch_im_0[0], torch_im_1[0], im_0_inds, im_1_inds, output_path)
@@ -123,13 +131,14 @@ def parse_args():
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
     parser.add_argument('--vis_dir', type=str, default='./vis')
     parser.add_argument('--window_length', type=int, default=8)
-    parser.add_argument('--num_good', type=int, default=20)
-    parser.add_argument('--num_bad', type=int, default=0)
+    parser.add_argument('--num_good', type=int, default=1000)
+    parser.add_argument('--num_bad', type=int, default=1000)
     parser.add_argument('--transformer_layers', type=int, default=2)
     parser.add_argument('--dual_softmax', action='store_true')
     parser.add_argument('--sinkhorn_iterations', type=int, default=100)
 
-    parser.add_argument('--match_threshold', type=float, default=0.4)
+    parser.add_argument('--match_threshold', type=float, default=0.6)
+    parser.add_argument('--top_n', type=int, default=10)
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)

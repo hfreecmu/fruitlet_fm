@@ -118,7 +118,8 @@ def arange_like(x, dim: int):
     return x.new_ones(x.shape[dim]).cumsum(0) - 1  # traceable in 1.1
 
 def extract_matches(scores, match_threshold):
-    max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
+    # max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
+    max0, max1 = scores[:, :, :].max(2), scores[:, :, :].max(1)
     indices0, indices1 = max0.indices, max1.indices
     mutual0 = arange_like(indices0, 1)[None] == indices1.gather(1, indices0)
     mutual1 = arange_like(indices1, 1)[None] == indices0.gather(1, indices1)
@@ -127,7 +128,25 @@ def extract_matches(scores, match_threshold):
     mscores1 = torch.where(mutual1, mscores0.gather(1, indices1), zero)
     valid0 = mutual0 & (mscores0 > match_threshold)
     valid1 = mutual1 & valid0.gather(1, indices1)
-    indices_0 = torch.where(valid0, indices0, indices0.new_tensor(-1))
-    indices_1 = torch.where(valid1, indices1, indices1.new_tensor(-1))
+    # indices_0 = torch.where(valid0, indices0, indices0.new_tensor(-1))
+    # indices_1 = torch.where(valid1, indices1, indices1.new_tensor(-1))
+    indices_0 = torch.where(valid0, indices0, indices0.new_tensor(-1))[:, 0:-1]
+    indices_1 = torch.where(valid1, indices1, indices1.new_tensor(-1))[:, 0:-1]
+    indices_0[indices_0 == (scores.shape[2] - 1)] = -1
+    indices_1[indices_1 == (scores.shape[1] - 1)] = -1
 
-    return indices_0, indices_1
+    return indices_0, indices_1, mscores0[:, 0:-1], mscores1[:, 0:-1]
+
+#assumes inputs are unsqueezed
+def prep_feature_data(seg_inds, bgrs, dim, width, height, device):
+    bgrs = bgrs.float() / 255
+    bgrs = bgrs.to(device)
+
+    seg_inds = seg_inds.float()
+    seg_inds[:, :, 0] = (2*seg_inds[:, :, 0] - width) / width
+    seg_inds[:, :, 1] = (2*seg_inds[:, :, 1] - height) / height
+
+    positional_encodings = positional_encoder(seg_inds, dim//4)
+    positional_encodings = positional_encodings.to(device)
+
+    return bgrs, positional_encodings

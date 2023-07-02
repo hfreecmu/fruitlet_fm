@@ -43,7 +43,7 @@ def train(opt):
                                  opt.window_length,
                                  opt.num_good, opt.num_bad,
                                  opt.batch_size, opt.shuffle)
-    
+        
     width, height = opt.width, opt.height
     dims = [32, 32, 64, 64, 128, 128]
     strides = [2, 1, 2, 1, 2, 2]
@@ -137,9 +137,9 @@ def train(opt):
                 unmatched_inds_i = torch.arange(matches_0[image_ind].shape[0])[~has_match_i]
                 unmatched_inds_j = torch.arange(matches_1[image_ind].shape[0])[~has_match_j]
 
-                matched_scores = 2*ind_scores[matched_inds_i, matched_inds_j]
-                unmatched_i_scores = 0.05*ind_scores[unmatched_inds_i, matches_0[image_ind].shape[0]]
-                unmatched_j_scores = 0.05*ind_scores[matches_1[image_ind].shape[0], unmatched_inds_j]
+                matched_scores = ind_scores[matched_inds_i, matched_inds_j]
+                unmatched_i_scores = 0.5*ind_scores[unmatched_inds_i, matches_0[image_ind].shape[0]]
+                unmatched_j_scores = 0.5*ind_scores[matches_1[image_ind].shape[0], unmatched_inds_j]
 
                 loss_scores = torch.concatenate((matched_scores, unmatched_i_scores, unmatched_j_scores))
                 #loss_scores = matched_scores
@@ -184,7 +184,7 @@ def parse_args():
 
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--shuffle', action='store_false')
-    parser.add_argument('--num_epochs', type=int, default=100)
+    parser.add_argument('--num_epochs', type=int, default=1000)
     parser.add_argument('--trans_lr', type=float, default=1e-4)
     parser.add_argument('--conv_lr', type=float, default=1e-3)
 
