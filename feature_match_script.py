@@ -33,7 +33,7 @@ def load_input_data(paths, index, fruitlet_dict, args):
     return torch_im, bgrs.unsqueeze(0), sub_seg_inds.unsqueeze(0), is_val.unsqueeze(0), seg_inds
 
 def get_homography(src_inds, dest_inds):
-    M, mask = cv2.findHomography(src_inds.astype(float), dest_inds.astype(float), cv2.RANSAC, ransacReprojThreshold=10)
+    M, mask = cv2.findHomography(src_inds.astype(float), dest_inds.astype(float), cv2.RANSAC, ransacReprojThreshold=5)
     return M, mask[:, 0]
 
 def run(data_dir, output_dir, fruitlet_dict, args):
@@ -101,22 +101,16 @@ def run(data_dir, output_dir, fruitlet_dict, args):
             im_1_inds = seg_inds_1[matched_inds_j] 
             matching_scores = mscores_0[matched_inds_i]
 
-            if im_0_inds.shape[0] > args.top_n:
-                sorted_score_inds = torch.argsort(-matching_scores)[0:args.top_n]
-                im_0_inds = im_0_inds[sorted_score_inds]
-                im_1_inds = im_1_inds[sorted_score_inds]
-                matching_scores = matching_scores[sorted_score_inds]
-
+            #TODO this before or after top_n?
             if args.use_homography:
                 _, mask = get_homography(im_0_inds.numpy().copy(), im_1_inds.numpy().copy())
                 ransac_inds = (mask > 0) 
                 im_0_inds = im_0_inds[ransac_inds]
                 im_1_inds = im_1_inds[ransac_inds]
-
-            output_path = os.path.join(args.vis_dir, 'debug_pair.png')
-            vis(torch_im_0[0], torch_im_1[0], im_0_inds, im_1_inds, output_path)
+                matching_scores = matching_scores[ransac_inds]
 
             ###save keypoint inds for bundle
+            #do this after homography before vis
             keypoints_0 = im_0_inds.numpy().copy()
             keypoints_1 = im_1_inds.numpy().copy()
             keypoints_0 = np.stack((keypoints_0[:, 0], keypoints_0[:, 1]), axis=1)
@@ -125,6 +119,18 @@ def run(data_dir, output_dir, fruitlet_dict, args):
             output_path = os.path.join(args.vis_dir, 'debug_match.pkl')
             write_pickle(output_path, [keypoints_0, keypoints_1])
             ###
+
+            if im_0_inds.shape[0] > args.top_n:
+                if not args.use_rand_n:
+                    sorted_score_inds = torch.argsort(-matching_scores)[0:args.top_n]
+                else:
+                    sorted_score_inds = np.random.choice(im_0_inds.shape[0], size=(args.top_n,), replace=False)
+                im_0_inds = im_0_inds[sorted_score_inds]
+                im_1_inds = im_1_inds[sorted_score_inds]
+                matching_scores = matching_scores[sorted_score_inds]
+
+            output_path = os.path.join(args.vis_dir, 'debug_pair.png')
+            vis(torch_im_0[0], torch_im_1[0], im_0_inds, im_1_inds, output_path)
 
             sift = cv2.SIFT_create()
             #sift = cv.ORB_create()
@@ -168,11 +174,12 @@ def parse_args():
     parser.add_argument('--transformer_layers', type=int, default=2)
     parser.add_argument('--sinkhorn_iterations', type=int, default=100)
 
-    #0.5 no centroid, 0.01 with centroid?
-    parser.add_argument('--use_centroid', action='store_false')
-    parser.add_argument('--match_threshold', type=float, default=0.01)
+    #0.5 no centroid, 0.01 with centroid for 33000 model?
+    parser.add_argument('--use_centroid', action='store_true')
+    parser.add_argument('--match_threshold', type=float, default=0.5)
     parser.add_argument('--use_homography', action='store_true')
     parser.add_argument('--top_n', type=int, default=20)
+    parser.add_argument('--use_rand_n', action='store_true')
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)

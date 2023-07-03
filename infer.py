@@ -95,8 +95,6 @@ def infer(opt):
                      ot_scores.append(log_optimal_transport(scores[image_ind:image_ind+1], transformer.bin_score, iters=opt.sinkhorn_iterations))
                 scores = torch.concatenate(ot_scores, dim=0)
             
-            #part where I stopped copying
-            #TODO this will dustbin match so maybe modify extract matches
             indices_0, indices_1, mscores_0, _ = extract_matches(scores, opt.match_threshold)
             indices_0, indices_1 = indices_0.cpu(), indices_1.cpu()
             mscores_0 = mscores_0.cpu()

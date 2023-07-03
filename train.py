@@ -55,7 +55,7 @@ def train(opt):
     feature_optimizer = optim.Adam(feature_encoder.parameters(), opt.conv_lr)
     transformer_optimizer = optim.Adam(transformer.parameters(), opt.trans_lr)
 
-    milestones = [20000, 25000, 30000, 35000, 40000, 45000]
+    milestones = [20000, 30000, 40000, 45000]
     feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
     transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
     ###
@@ -138,7 +138,6 @@ def train(opt):
                 has_match_j = (matches_1[image_ind] != -1)
 
                 #only doing once as two way
-                #TODO could double weigth of proper match and do two way?
                 matched_inds_i = torch.arange(matches_0[image_ind].shape[0])[has_match_i]
                 matched_inds_j = matches_0[image_ind, has_match_i]
 

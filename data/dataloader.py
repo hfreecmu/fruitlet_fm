@@ -11,7 +11,8 @@ from utils.torch_utils import load_torch_image
 class FeatureDataset(Dataset):
     def __init__(self, images_dir, segmentations_dir, window_length, num_good,
                  num_bad, shuffle_inds=True,
-                 rand_flip=True, affine_thresh=0.3, aug_orig_thresh=0.3):
+                 rand_flip=True, affine_thresh=0.3, aug_orig_thresh=0.3,
+                 centroid_thresh=0.5):
         
         self.paths = self.get_paths(images_dir, segmentations_dir)
         self.window_length = window_length
@@ -22,6 +23,7 @@ class FeatureDataset(Dataset):
         self.rand_flip = rand_flip
         self.affine_thresh = affine_thresh
         self.aug_orig_thresh = aug_orig_thresh
+        self.centroid_thresh = centroid_thresh
 
         self.random_affine = T.RandomAffine(degrees=(-30, 30), translate=(0.1, 0.1), scale=(0.75, 0.9))
         self.random_brightness = T.ColorJitter(brightness=(0.5,1.5),contrast=(1),saturation=(0.5,1.5),hue=(-0.1,0.1))
@@ -198,10 +200,26 @@ class FeatureDataset(Dataset):
             raise RuntimeError("Something wrong, seg inds should be equal size")
         
         num_segs = self.num_good + self.num_bad
+        use_centroid = np.random.random() < self.centroid_thresh
         if seg_inds_0.shape[0] > self.num_good:
-            selected_inds = np.random.choice(seg_inds_0.shape[0], size=(self.num_good,), replace=False)
-            seg_inds_0 = seg_inds_0[selected_inds]
-            seg_inds_1 = seg_inds_1[selected_inds]
+            if not use_centroid:
+                selected_inds = np.random.choice(seg_inds_0.shape[0], size=(self.num_good,), replace=False)
+                seg_inds_0 = seg_inds_0[selected_inds]
+                seg_inds_1 = seg_inds_1[selected_inds]
+            else:
+                med_point_0 = np.median(seg_inds_0, axis=0)
+                dists_0 = np.linalg.norm(seg_inds_0 - med_point_0, axis=1)
+                min_dists_inds_0 = np.argsort(dists_0)
+                min_dists_inds_0 = min_dists_inds_0[0:self.num_good]
+
+                med_point_1 = np.median(seg_inds_1, axis=0)
+                dists_1 = np.linalg.norm(seg_inds_1 - med_point_1, axis=1)
+                min_dists_inds_1 = np.argsort(dists_1)
+                min_dists_inds_1 = min_dists_inds_1[0:self.num_good]
+
+                selected_inds = np.intersect1d(min_dists_inds_0, min_dists_inds_1, assume_unique=True)
+                seg_inds_0 = seg_inds_0[selected_inds]
+                seg_inds_1 = seg_inds_1[selected_inds]
 
         num_bad_sample = num_segs - seg_inds_0.shape[0]
         num_pad = np.ceil(np.sqrt(num_bad_sample) / 2).astype(int)
