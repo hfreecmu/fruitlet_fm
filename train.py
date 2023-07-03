@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from data.dataloader import get_data_loader
 from models.nbv_models import load_feature_encoder, positional_encoder, Transformer
-from utils.torch_utils import save_checkpoint
+from utils.torch_utils import save_checkpoint, plot_loss
 
 def log_sinkhorn_iterations(Z: torch.Tensor, log_mu: torch.Tensor, log_nu: torch.Tensor, iters: int) -> torch.Tensor:
     """ Perform Sinkhorn Normalization in Log-space for stability"""
@@ -43,7 +43,7 @@ def train(opt):
                                  opt.window_length,
                                  opt.num_good, opt.num_bad,
                                  opt.batch_size, opt.shuffle)
-        
+    
     width, height = opt.width, opt.height
     dims = [32, 32, 64, 64, 128, 128]
     strides = [2, 1, 2, 1, 2, 2]
@@ -54,12 +54,20 @@ def train(opt):
     ###optimizers
     feature_optimizer = optim.Adam(feature_encoder.parameters(), opt.conv_lr)
     transformer_optimizer = optim.Adam(transformer.parameters(), opt.trans_lr)
+
+    milestones = [20000, 25000, 30000, 35000, 40000, 45000]
+    feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
+    transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
     ###
 
-    for epoch in range(opt.num_epochs):
-        losses = 0
-        num_losses = 0
-        for batch_num, data in enumerate(dataloader):
+    loss_array = []
+    step_num = 0
+    while step_num < opt.num_steps:
+        for _, data in enumerate(dataloader):
+            if (step_num % opt.log_steps) == 0:
+                losses = 0
+                num_losses = 0
+
             _, _, bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, matches_0, matches_1 = data
             
             num_images = bgrs_0.shape[0]
@@ -154,19 +162,29 @@ def train(opt):
             feature_optimizer.step()
             transformer_optimizer.step()
 
+            feature_scheduler.step()
+            transform_scheduler.step()
+
             losses += loss.item()
             num_losses += 1
 
-        if num_losses == 0:
-            epoch_loss = 'NA'
-        else:
-            epoch_loss = str(losses/num_losses)
-        print('loss for epoch: ', epoch, ' is: ', epoch_loss)
+            if ((step_num + 1) % opt.log_steps) == 0:
+                if num_losses == 0:
+                    epoch_loss = -1
+                else:
+                    epoch_loss = losses/num_losses
+                print('loss for step: ', step_num + 1, ' is: ', epoch_loss)
 
-        if (epoch + 1) % 20 == 0:
-            save_checkpoint(epoch, opt.checkpoint_dir, feature_encoder, transformer) 
+                loss_array.append([step_num + 1, epoch_loss])
+                plot_loss(loss_array, opt.checkpoint_dir)
 
-    save_checkpoint(epoch, opt.checkpoint_dir, feature_encoder, transformer)   
+
+            if ((step_num + 1) % opt.log_checkpoints) == 0:
+                print('saving checkpoint for step: ', step_num + 1)
+                save_checkpoint(step_num + 1, opt.checkpoint_dir, feature_encoder, transformer) 
+
+            step_num += 1
+
     print('Done')         
     
 def parse_args():
@@ -184,9 +202,12 @@ def parse_args():
 
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--shuffle', action='store_false')
-    parser.add_argument('--num_epochs', type=int, default=1000)
     parser.add_argument('--trans_lr', type=float, default=1e-4)
     parser.add_argument('--conv_lr', type=float, default=1e-3)
+
+    parser.add_argument('--num_steps', type=int, default=50000)
+    parser.add_argument('--log_steps', type=int, default=100)
+    parser.add_argument('--log_checkpoints', type=int, default=100)
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)

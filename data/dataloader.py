@@ -162,7 +162,8 @@ class FeatureDataset(Dataset):
 
         segmentations = read_pickle(seg_path_locs)
         seg_inds = segmentations[seg_ind_locs]
-        seg_inds = np.stack((seg_inds[1], seg_inds[0]), axis=1)
+        # seg_inds = np.stack((seg_inds[1], seg_inds[0]), axis=1)
+        seg_inds = np.stack((seg_inds[:, 1], seg_inds[:, 0]), axis=1)
         if flip:
             seg_inds[:, 0] = torch_im.shape[-1] - seg_inds[:, 0]
 

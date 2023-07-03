@@ -2,6 +2,7 @@ import os
 import torch
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
 #img is returned unsqueezed
 def load_torch_image(imfile, rand_flip):
@@ -23,6 +24,22 @@ def save_checkpoint(epoch, checkpoint_dir, feature_model, transformer_model):
     torch.save(feature_model.state_dict(), feature_path)
     torch.save(transformer_model.state_dict(), transformer_path)
 
+def plot_loss(loss_array, checkpoint_dir):
+    loss_plot_path = os.path.join(checkpoint_dir, 'loss.png')
+    loss_np_path = os.path.join(checkpoint_dir, 'loss.npy')
+
+    loss_array = np.array(loss_array)
+
+    np.save(loss_np_path, loss_array)
+
+    plt.plot(loss_array[:, 0], loss_array[:, 1], 'b')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.savefig(loss_plot_path)
+
+    plt.clf()
+
+
 def load_checkpoint(epoch, checkpoint_dir, feature_model, transformer_model):
     feature_path = os.path.join(checkpoint_dir, 'epoch_%d_feature.pth' % epoch)
     transformer_path = os.path.join(checkpoint_dir, 'epoch_%d_transformer.pth' % epoch)
@@ -30,13 +47,65 @@ def load_checkpoint(epoch, checkpoint_dir, feature_model, transformer_model):
     feature_model.load_state_dict(torch.load(feature_path))
     transformer_model.load_state_dict(torch.load(transformer_path))
 
+def get_bad_samples(seg_inds, num_pad, num_bad_sample):
+    x_min, y_min = np.min(seg_inds, axis=0)
+    x_max, y_max = np.max(seg_inds, axis=0)
+
+    x_sample = np.arange(x_min - num_pad, x_max + num_pad + 1)
+    y_sample = np.arange(y_min - num_pad, y_max + num_pad + 1)
+    xv, yv = np.meshgrid(x_sample, y_sample, indexing='ij')
+    bad_sample = np.stack((xv.flatten(), yv.flatten()), axis=1)
+    bad_sample_inds = np.invert(np.bitwise_and.reduce(np.in1d(bad_sample, seg_inds).reshape((-1, 2)), axis=1))
+    bad_sample = bad_sample[bad_sample_inds]
+
+    if bad_sample.shape[0] >= num_bad_sample:
+        sample_inds = np.random.choice(bad_sample.shape[0], size=(num_bad_sample,), replace=False)
+    else:
+        sample_inds = np.random.choice(bad_sample.shape[0], size=(num_bad_sample,), replace=True)
+
+    bad_sample = bad_sample[sample_inds]
+
+    return bad_sample 
+
 #TODO will be called twice in dataloader, how speed up?
-def load_feature_inputs(torch_im, seg_inds, window_length):
-    good_inds_0 = np.where((seg_inds[:, 0] - window_length >= 0) & 
+def load_feature_inputs(torch_im, seg_inds, window_length, num_good, num_bad, use_centroid):
+    good_inds = np.where((seg_inds[:, 0] - window_length >= 0) & 
                             (seg_inds[:, 0] + window_length < torch_im.shape[-1] - 1) & 
                             (seg_inds[:, 1] - window_length >= 0) & 
                             (seg_inds[:, 1] + window_length < torch_im.shape[-2] - 1))
-    seg_inds = seg_inds[good_inds_0]
+    seg_inds = seg_inds[good_inds]
+
+    num_segs = num_good + num_bad
+    if seg_inds.shape[0] > num_good:
+        if not use_centroid:
+            selected_inds = np.random.choice(seg_inds.shape[0], size=(num_good,), replace=False)
+            seg_inds = seg_inds[selected_inds]
+        else:
+            med_point = np.median(seg_inds, axis=0)
+            dists = np.linalg.norm(seg_inds - med_point, axis=1)
+            min_dists_inds = np.argsort(dists)
+            seg_inds = seg_inds[min_dists_inds[0:num_good]]
+
+    num_bad_sample = num_segs - seg_inds.shape[0]
+    num_pad = np.ceil(np.sqrt(num_bad_sample) / 2).astype(int)
+
+    bad_sample = get_bad_samples(seg_inds, num_pad, num_bad_sample)
+
+    ###filter bad samples
+    good_inds = np.where((bad_sample[:, 0] - window_length >= 0) & 
+                         (bad_sample[:, 0] + window_length < torch_im.shape[-1] - 1) & 
+                         (bad_sample[:, 1] - window_length >= 0) & 
+                         (bad_sample[:, 1] + window_length < torch_im.shape[-2] - 1))
+    bad_sample = bad_sample[good_inds]
+
+    is_val = np.concatenate((np.zeros((seg_inds.shape[0]), dtype=int) + 1, np.zeros((bad_sample.shape[0]), dtype=int)))
+    seg_inds = np.concatenate((seg_inds, bad_sample), axis=0)
+
+    if seg_inds.shape[0] < num_segs:
+        num_to_add = num_segs - seg_inds.shape[0]
+        new_inds = np.random.choice(seg_inds.shape[0], size=(num_to_add,), replace=True)
+        seg_inds = np.concatenate((seg_inds, seg_inds[new_inds]), axis=0)
+        is_val = np.concatenate((is_val, is_val[new_inds]), axis=0)
 
     window_size = 2*window_length
     bgrs = torch.zeros((seg_inds.shape[0], 3, window_size, window_size), dtype=torch_im.dtype)
@@ -45,4 +114,4 @@ def load_feature_inputs(torch_im, seg_inds, window_length):
         window = torch_im[0, :, y-window_length:y+window_length, x-window_length:x+window_length]
         bgrs[ind] = window
 
-    return torch.from_numpy(seg_inds), bgrs
+    return torch.from_numpy(seg_inds), bgrs, torch.from_numpy(is_val)

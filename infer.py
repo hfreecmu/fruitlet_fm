@@ -7,6 +7,7 @@ from data.dataloader import get_data_loader
 from models.nbv_models import load_feature_encoder, positional_encoder, extract_matches, Transformer
 from utils.torch_utils import load_checkpoint
 from utils.nbv_utils import vis
+import numpy as np
 
 from train import log_optimal_transport
 
@@ -118,6 +119,16 @@ def infer(opt):
                 
                 output_path = os.path.join(opt.vis_dir, 'debug_im.png')
                 vis(torch_im_0[0], torch_im_1[0], im_0_inds, im_1_inds, output_path)
+
+                debug_path = os.path.join(opt.vis_dir, 'debug_debug.png')
+                
+                debug_is_match = (matches_0[0] > -1)
+                debug_inds_0 = np.arange(seg_inds_0_orig.shape[1])[debug_is_match]
+                debug_inds_1 = matches_0[0, debug_is_match].numpy()
+                #rand_inds = np.random.choice(debug_inds_0.shape[0], size=(5,), replace=False)
+                #debug_inds_0 = debug_inds_0[rand_inds]
+                #debug_inds_1 = debug_inds_1[rand_inds]
+                vis(torch_im_0[0], torch_im_1[0], seg_inds_0_orig[0, debug_inds_0], seg_inds_1_orig[0, debug_inds_1], debug_path)
                 print('Done')
 
                 return
@@ -138,7 +149,7 @@ def parse_args():
     parser.add_argument('--sinkhorn_iterations', type=int, default=100)
 
     parser.add_argument('--match_threshold', type=float, default=0.6)
-    parser.add_argument('--top_n', type=int, default=10)
+    parser.add_argument('--top_n', type=int, default=20)
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)
