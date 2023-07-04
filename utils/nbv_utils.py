@@ -257,6 +257,6 @@ def vis(torch_im_0, torch_im_1, torch_points_0, torch_points_1, output_path, pad
         x1, y1 = points_1[i]
         x1 += width + padding
 
-        cv2.line(comb_im, (x0, y0), (x1, y1), color, thickness=2)
+        cv2.line(comb_im, (x0, y0), (x1, y1), color, thickness=1)
 
     cv2.imwrite(output_path, comb_im)

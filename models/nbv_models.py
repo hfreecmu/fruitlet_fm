@@ -117,7 +117,7 @@ def load_feature_encoder(dims, strides, device, eval=False):
 def arange_like(x, dim: int):
     return x.new_ones(x.shape[dim]).cumsum(0) - 1  # traceable in 1.1
 
-def extract_matches(scores, match_threshold, use_dustbin=True):
+def extract_matches(scores, match_threshold, use_dustbin):
     if use_dustbin:
         max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
     else:
