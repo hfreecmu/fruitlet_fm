@@ -8,26 +8,31 @@ import json
 import pickle
 import distinctipy
 
+#read json file
 def read_json(path):
     with open(path, 'r') as f:
         json_to_read = json.loads(f.read())
     
     return json_to_read
 
+#read yaml file
 def read_yaml(path):
     with open(path, 'r') as f:
         yaml_to_read = yaml.safe_load(f)
 
     return yaml_to_read
 
+#read pkl file
 def read_pickle(path):
     with open(path, "rb") as f:
         return pickle.load(f)
 
+#write pkl file
 def write_pickle(path, data):
     with open(path, "wb") as f:
         pickle.dump(data, f)
 
+#get intrinsics struck from dict
 def get_intrinsics(camera_info):
     P = camera_info['projection_matrix']['data']
     f_norm = P[0]
@@ -38,6 +43,7 @@ def get_intrinsics(camera_info):
 
     return intrinsics
 
+#get transform from yml path
 def get_transform(transform_path):
     transform_dict = read_yaml(transform_path)
     quat = transform_dict['quaternion']
@@ -51,6 +57,7 @@ def get_transform(transform_path):
 
     return R, t
 
+#bilateral filter
 def bilateral_filter(disparity, intrinsics, args):
     baseline, f_norm, _, _ = intrinsics
     stub = -baseline / disparity
@@ -62,6 +69,7 @@ def bilateral_filter(disparity, intrinsics, args):
 
     return disparity_new
 
+#extract depth discontinuities
 def extract_depth_discontuinities(disparity, intrinsics, args):
     baseline, f_norm, _, _ = intrinsics
     stub = -baseline / disparity
@@ -87,6 +95,7 @@ def extract_depth_discontuinities(disparity, intrinsics, args):
 
     return discontinuity_map
 
+#compute points using our method
 def compute_points(disparity, intrinsics):
     baseline, f_norm, cx, cy = intrinsics
     stub = -baseline / disparity #*0.965
@@ -101,6 +110,7 @@ def compute_points(disparity, intrinsics):
 
     return points
 
+#compute points using opencv - same as above
 def compute_points_opencv(disparity, intrinsics):
     baseline, f_norm, cx, cy = intrinsics
     
@@ -126,6 +136,7 @@ def compute_points_opencv(disparity, intrinsics):
 
     return points
 
+#save point cloud file
 def create_point_cloud(cloud_path, points, colors, normals=None, estimate_normals=False):
     cloud = open3d.geometry.PointCloud()
     cloud.points = open3d.utility.Vector3dVector(points)
@@ -142,6 +153,7 @@ def create_point_cloud(cloud_path, points, colors, normals=None, estimate_normal
         cloud
     ) 
 
+#extract point cloud using filters
 def extract_point_cloud(left_path, disparity_path, 
                         camera_info_path, transform_path, args):
     camera_info = read_yaml(camera_info_path)
@@ -173,6 +185,7 @@ def extract_point_cloud(left_path, disparity_path,
 
     return points, world_points, colors, R, t
 
+#get paths following directory structure
 def get_paths(data_dir, indices, single=False):
     left_dir = os.path.join(data_dir, 'rect_images', 'left')
     disparities_dir = os.path.join(data_dir, 'disparities')
@@ -225,6 +238,7 @@ def get_paths(data_dir, indices, single=False):
     else:
         return 0, left_paths[0], disparity_paths[0], camera_info_paths[0], transform_paths[0], segmentation_paths[0]
 
+#warp 2D points using homography
 def warp_points(points, H):
     points_homo = np.ones((points.shape[0], 3))
     points_homo[:, 0:2] = points
@@ -233,6 +247,27 @@ def warp_points(points, H):
 
     return perspective_points
 
+def drop_points(valid_inds_bool, drop_thresh):
+    should_drop = (np.random.random(size=valid_inds_bool.shape[0]) < drop_thresh)
+    valid_inds_bool[should_drop] = False
+
+def select_valid_points(valid_inds_bool, num_points):
+    valid_inds_int = np.arange(valid_inds_bool.shape[0])[valid_inds_bool]
+
+    if valid_inds_int.shape[0] <= num_points:
+        return valid_inds_bool
+    
+    random_inds_subset = np.random.choice(valid_inds_int.shape[0], size=(num_points,), replace=False)
+    
+    valid_inds_bool_out = np.zeros(valid_inds_bool.shape[0], dtype=bool)
+    valid_inds_bool_out[valid_inds_int[random_inds_subset]] = True
+
+    return valid_inds_bool_out
+
+def select_points(valid_inds_bool, seg_inds, bgr_vals):
+    return seg_inds[valid_inds_bool], bgr_vals[valid_inds_bool]
+
+#visualize feature matches
 def vis(torch_im_0, torch_im_1, torch_points_0, torch_points_1, output_path, padding=20):
     cv_im_0 = torch_im_0.permute(1, 2, 0).numpy().copy()
     cv_im_1 = torch_im_1.permute(1, 2, 0).numpy().copy()

@@ -5,25 +5,42 @@ import torchvision.transforms.functional as F
 import numpy as np
 import torch
 
-from utils.nbv_utils import read_pickle, warp_points
-from utils.torch_utils import load_torch_image
+from utils.nbv_utils import read_pickle, warp_points, drop_points
+from utils.nbv_utils import select_valid_points, select_points
+from utils.torch_utils import load_torch_image, load_feature_inputs
+from utils.torch_utils import create_mask
 
+#TODO add bad points back in?
+#TODO add centroid back in?
 class FeatureDataset(Dataset):
-    def __init__(self, images_dir, segmentations_dir, window_length, num_good,
-                 num_bad, shuffle_inds=True,
-                 rand_flip=True, affine_thresh=0.3, aug_orig_thresh=0.3,
-                 centroid_thresh=0.5):
+    def __init__(self, images_dir, segmentations_dir, window_length,
+                 num_points, #max number of transformer points (if smaller will be masked)
+                 shuffle_inds=True, #whether to shuffle order of points
+                 rand_flip=True, #whether to flip image
+                 drop_point_thresh=0.1, #percentage to drop random point from both masks 
+                 affine_thresh=0.3, #percentage of using affine thresh
+                 aug_orig_thresh=0.3, #percentage of augmenting original image
+                 aug_bright_orig_thresh=0.4, #if not augment original image, whether or not to randomly brighten
+                 other_match_thresh=0.2, #percentage of matching against two different fruitlets
+                 other_attempts=5, #number of attempts to try this if there is a bug
+                 cluster_match_thresh=0.5, #if above, percentage of matching with fruitlet from same cluster
+                 swap_thresh=0.5, #whether to swap two images
+                 ):
         
         self.paths = self.get_paths(images_dir, segmentations_dir)
         self.window_length = window_length
-        self.num_good = num_good
-        self.num_bad = num_bad
+        self.num_points = num_points
         self.shuffle_inds = shuffle_inds
 
         self.rand_flip = rand_flip
+        self.drop_point_thresh = drop_point_thresh
         self.affine_thresh = affine_thresh
         self.aug_orig_thresh = aug_orig_thresh
-        self.centroid_thresh = centroid_thresh
+        self.aug_bright_orig_thresh = aug_bright_orig_thresh
+        self.other_match_thresh = other_match_thresh
+        self.other_attempts = other_attempts
+        self.cluster_match_thresh = cluster_match_thresh
+        self.swap_thresh = swap_thresh
 
         self.random_affine = T.RandomAffine(degrees=(-30, 30), translate=(0.1, 0.1), scale=(0.75, 0.9))
         self.random_brightness = T.ColorJitter(brightness=(0.5,1.5),contrast=(1),saturation=(0.5,1.5),hue=(-0.1,0.1))
@@ -50,7 +67,7 @@ class FeatureDataset(Dataset):
     
     def __len__(self):
         return len(self.paths)
-    
+
     def augment_affine(self, torch_im, seg_inds):
         angle, translations, scale, shear = T.RandomAffine.get_params(self.random_affine.degrees, 
                                                                       self.random_affine.translate,
@@ -73,27 +90,6 @@ class FeatureDataset(Dataset):
         affine_seg_inds = np.round(affine_seg_inds).astype(int)
 
         torch_affine_img = F.affine(torch_im, angle, translations, scale, shear)
-
-        #alternatively:
-
-        # width = torch_im.shape[-1]
-        # height = torch_im.shape[-2]
-
-        # start_points_a = np.array([[0, 0],
-        #                            [width - 1, 0],
-        #                            [width - 1, height - 1],
-        #                            [0, height - 1]])
-
-        #end_points_a = warp_points(np.array(start_points_a), M)
-        #end_points_a = np.round(end_points_a).astype(int)
-
-        # M = F._get_perspective_coeffs(end_points_a.tolist(), start_points_a.tolist())
-        # M = np.array([[M[0], M[1], M[2]],
-        #               [M[3], M[4], M[5]],
-        #               [M[6], M[7], 1.0]])
-
-        #torch_affine_img = F.perspective(torch_im, start_points_a.tolist(), 
-        #                                 end_points_a.tolist())
 
         return torch_affine_img, affine_seg_inds
     
@@ -118,8 +114,8 @@ class FeatureDataset(Dataset):
         
         return torch_perspective_img, perspective_seg_inds
 
-    def augment(self, torch_im, seg_inds, affine_thresh):
-        affine = np.random.random() < affine_thresh
+    def augment(self, torch_im, seg_inds):
+        affine = np.random.random() < self.affine_thresh
 
         if affine:
             aug_torch_im, aug_seg_inds = self.augment_affine(torch_im, seg_inds)
@@ -130,185 +126,248 @@ class FeatureDataset(Dataset):
 
         return aug_torch_im, aug_seg_inds
     
-    def get_bad_samples(self, seg_inds, num_pad, num_bad_sample):
-        x_min, y_min = np.min(seg_inds, axis=0)
-        x_max, y_max = np.max(seg_inds, axis=0)
-
-        x_sample = np.arange(x_min - num_pad, x_max + num_pad + 1)
-        y_sample = np.arange(y_min - num_pad, y_max + num_pad + 1)
-        xv, yv = np.meshgrid(x_sample, y_sample, indexing='ij')
-        bad_sample = np.stack((xv.flatten(), yv.flatten()), axis=1)
-        bad_sample_inds = np.invert(np.bitwise_and.reduce(np.in1d(bad_sample, seg_inds).reshape((-1, 2)), axis=1))
-        bad_sample = bad_sample[bad_sample_inds]
-
-        if bad_sample.shape[0] >= num_bad_sample:
-            sample_inds = np.random.choice(bad_sample.shape[0], size=(num_bad_sample,), replace=False)
-        else:
-            sample_inds = np.random.choice(bad_sample.shape[0], size=(num_bad_sample,), replace=True)
-
-        bad_sample = bad_sample[sample_inds]
-
-        return bad_sample   
-    
     def __getitem__(self, idx):
+        use_other_match = np.random.random() < self.other_match_thresh
+        if False and use_other_match:
+            func = self.get_other_item
+        else:
+            func = self.get_aug_item
+
+        num_attempts = 0
         while True:
             try:
-                return self.get_aug_item(idx)
-            except:
-                pass
+                if num_attempts < self.other_attempts:
+                    return func(idx)
+                else:
+                    #revert to what we know
+                    return self.get_aug_item(idx)
+            except Exception as e:
+                print('Error in data loader')
+                num_attempts += 1
+                if ((num_attempts == self.other_attempts) and (use_other_match)):
+                    print('Num attempts exceeded other attempts')
+    
+    def get_other_item(self, idx):
+        img_path_locs_0, seg_path_locs_0, seg_ind_locs_0 = self.paths[idx]
+
+        #determine if use non-matche fruitlet from same cluster or not
+        cluster_match = np.random.random() < self.cluster_match_thresh
+        if cluster_match:
+            #if yes, read segmentation from same path but different idx
+            rand_segmentations = read_pickle(seg_path_locs_0)
+            rand_ind_idx = seg_ind_locs_0
+            while rand_ind_idx == seg_ind_locs_0:
+                rand_ind_idx = np.random.randint(0, len(rand_segmentations))
+            img_path_locs_1, seg_path_locs_1, seg_ind_locs_1 = img_path_locs_0, seg_path_locs_0, rand_ind_idx
+        else:
+            #if not, read segmentation from different path
+            rand_idx = idx
+            while rand_idx == idx:
+                rand_idx = np.random.randint(0, len(self.paths))
+            img_path_locs_1, seg_path_locs_1, seg_ind_locs_1 = self.paths[rand_idx]
+
+        #load torch image and whether it was randomly flippped
+        torch_im_0, _, flip_0 = load_torch_image(img_path_locs_0, rand_flip=self.rand_flip)
+
+        #load second torch image
+        #if cluster matching, want to also random flip other fruitlet in cluster
+        if cluster_match:
+            torch_im_1, _, flip_1 = load_torch_image(img_path_locs_1, rand_flip=self.rand_flip, force_flip=flip_0)
+            if flip_0 != flip_1:
+                raise RuntimeError('flip_0 and flip_1 must match use_self_match')
+        else:
+            torch_im_1, _, flip_1 = load_torch_image(img_path_locs_1, rand_flip=self.rand_flip)
+
+        #get segmnetations and flip ir originals where flipped
+        segmentations_0 = read_pickle(seg_path_locs_0)
+        segmentations_1 = read_pickle(seg_path_locs_1)
+        seg_inds_0 = segmentations_0[seg_ind_locs_0]
+        seg_inds_1 = segmentations_1[seg_ind_locs_1]
+        seg_inds_0 = np.stack((seg_inds_0[:, 1], seg_inds_0[:, 0]), axis=1)
+        seg_inds_1 = np.stack((seg_inds_1[:, 1], seg_inds_1[:, 0]), axis=1)
+        if flip_0:
+            seg_inds_0[:, 0] = torch_im_0.shape[-1] - seg_inds_0[:, 0]
+        if flip_1:
+            seg_inds_1[:, 0] = torch_im_1.shape[-1] - seg_inds_1[:, 0]
+
+        #determine whether we should augment images
+        #this will use aug_orig_thresh because we may not want to 
+        #augment both all the time
+        #if not augment, still add random brightness
+        should_augment_im_0 = np.random.random() < self.aug_orig_thresh
+        should_augment_im_1 = np.random.random() < self.aug_orig_thresh
+        if should_augment_im_0:
+            torch_im_0, seg_inds_0 = self.augment(torch_im_0, seg_inds_0)
+        else:
+            should_rand_bright_0 = np.random.random() < self.aug_bright_orig_thresh
+            if should_rand_bright_0:
+                torch_im_0 = self.random_brightness(torch_im_0)
+        if should_augment_im_1:
+            torch_im_1, seg_inds_1 = self.augment(torch_im_1, seg_inds_1)
+        else:
+            should_rand_bright_1 = np.random.random() < self.aug_bright_orig_thresh
+            if should_rand_bright_1:
+                torch_im_1 = self.random_brightness(torch_im_1)
+
+        #determine to swap inputs
+        should_swap = np.random.random() < self.swap_thresh
+        if should_swap:
+            torch_im_0, torch_im_1 = torch_im_1, torch_im_0
+            seg_inds_0, seg_inds_1 = seg_inds_1, seg_inds_0
+
+        #get bgr features and which seg_inds to use
+        bgrs_0, used_seg_inds_0 = load_feature_inputs(torch_im_0, seg_inds_0, self.window_length) 
+        bgrs_1, used_seg_inds_1 = load_feature_inputs(torch_im_1, seg_inds_1, self.window_length) 
+
+        #randomly drop points independantly
+        drop_points(used_seg_inds_0, self.drop_point_thresh)
+        drop_points(used_seg_inds_1, self.drop_point_thresh)
+
+        #if more than num_points need to drop
+        #output of this does not mean array is length num_points,
+        #only the sum is less than
+        used_seg_inds_0 = select_valid_points(used_seg_inds_0, self.num_points)
+        used_seg_inds_1 = select_valid_points(used_seg_inds_1, self.num_points)
+
+        #we can now shuffle both points
+        #because there is no 1:1 matching,
+        #this is done differently than in get_aug_item
+        if self.shuffle_inds:
+            perm_0 = np.random.permutation(seg_inds_0.shape[0])
+            seg_inds_0 = seg_inds_0[perm_0]
+            bgrs_0 = bgrs_0[perm_0]
+            used_seg_inds_0 = used_seg_inds_0[perm_0]
+
+            perm_1 = np.random.permutation(seg_inds_1.shape[0])
+            seg_inds_1 = seg_inds_1[perm_1]
+            bgrs_1 = bgrs_1[perm_1]
+            used_seg_inds_1 = used_seg_inds_1[perm_1]
+
+        #select our segmentation indices and our matches
+        #used_seg_inds_0 and used_seg_inds_1 are done after this
+        seg_inds_0, bgrs_0 = select_points(used_seg_inds_0, seg_inds_0, bgrs_0)
+        seg_inds_1, bgrs_1 = select_points(used_seg_inds_1, seg_inds_1, bgrs_1)
+
+        #set matches to -1
+        matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1
+        matches_1 = np.zeros((seg_inds_1.shape[0]), dtype=int) - 1
+
+        if seg_inds_0.shape[0] > self.num_points:
+            raise RuntimeError('seg_inds_0 too large, something is wrong')
+
+        if seg_inds_1.shape[0] > self.num_points:
+            raise RuntimeError('seg_inds_1 too large, something is wrong')
+        
+        #now we can add masked points
+        seg_inds_0, bgrs_0, matches_0, is_mask_0, num_mask_0 = create_mask(seg_inds_0, bgrs_0, matches_0, self.num_points)
+        seg_inds_1, bgrs_1, matches_1, is_mask_1, num_mask_1 = create_mask(seg_inds_1, bgrs_1, matches_1, self.num_points)
+
+        #return
+        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1
 
     def get_aug_item(self, idx):
         img_path_locs, seg_path_locs, seg_ind_locs = self.paths[idx]
 
+        #load torch image and whether it was randomly flipped
         torch_im, _, flip = load_torch_image(img_path_locs, rand_flip=self.rand_flip)
 
+        #get segmentations and flip if original image was fipped
         segmentations = read_pickle(seg_path_locs)
         seg_inds = segmentations[seg_ind_locs]
-        # seg_inds = np.stack((seg_inds[1], seg_inds[0]), axis=1)
         seg_inds = np.stack((seg_inds[:, 1], seg_inds[:, 0]), axis=1)
         if flip:
             seg_inds[:, 0] = torch_im.shape[-1] - seg_inds[:, 0]
 
-        torch_im_1, seg_inds_1 = self.augment(torch_im, seg_inds, self.affine_thresh)
+        #get augmented with perspective or affine transform and random brightntess
+        torch_im_1, seg_inds_1 = self.augment(torch_im, seg_inds)
 
-        augment_im_0 = np.random.random() < self.aug_orig_thresh
-        if augment_im_0:
-            torch_im_0, seg_inds_0 = self.augment(torch_im, seg_inds, self.affine_thresh)
+        #determine whether or not to augment original image
+        should_augment_im_0 = np.random.random() < self.aug_orig_thresh
+        if should_augment_im_0:
+            #augment same way
+            torch_im_0, seg_inds_0 = self.augment(torch_im, seg_inds)
         else:
-            should_rand_bright = np.random.random() < 0.5
+            should_rand_bright = np.random.random() < self.aug_bright_orig_thresh
             if should_rand_bright:
                 torch_im_0 = self.random_brightness(torch_im)
             else:
                 torch_im_0 = torch_im
             seg_inds_0 = seg_inds
 
-        good_inds_0 = np.where((seg_inds_0[:, 0] - self.window_length >= 0) & 
-                               (seg_inds_0[:, 0] + self.window_length < torch_im_0.shape[-1] - 1) & 
-                               (seg_inds_0[:, 1] - self.window_length >= 0) & 
-                               (seg_inds_0[:, 1] + self.window_length < torch_im_0.shape[-2] - 1))
-        seg_inds_0 = seg_inds_0[good_inds_0]
-        seg_inds_1 = seg_inds_1[good_inds_0]
+        #determine to swap inputs
+        should_swap = np.random.random() < self.swap_thresh
+        if should_swap:
+            torch_im_0, torch_im_1 = torch_im_1, torch_im_0
+            seg_inds_0, seg_inds_1 = seg_inds_1, seg_inds_0
 
-        good_inds_1 = np.where((seg_inds_1[:, 0] - self.window_length >= 0) & 
-                               (seg_inds_1[:, 0] + self.window_length < torch_im_1.shape[-1] - 1) & 
-                               (seg_inds_1[:, 1] - self.window_length >= 0) & 
-                               (seg_inds_1[:, 1] + self.window_length < torch_im_1.shape[-2] - 1))
-        seg_inds_0 = seg_inds_0[good_inds_1]
-        seg_inds_1 = seg_inds_1[good_inds_1]
-
-        if not (seg_inds_0.shape[0] == seg_inds_1.shape[0]):
-            raise RuntimeError("Something wrong, seg inds should be equal size")
+        #get bgr features and which seg_inds to use
+        bgrs_0, used_seg_inds_0 = load_feature_inputs(torch_im_0, seg_inds_0, self.window_length) 
+        bgrs_1, used_seg_inds_1 = load_feature_inputs(torch_im_1, seg_inds_1, self.window_length) 
         
-        num_segs = self.num_good + self.num_bad
-        use_centroid = np.random.random() < self.centroid_thresh
-        if seg_inds_0.shape[0] > self.num_good:
-            if not use_centroid:
-                selected_inds = np.random.choice(seg_inds_0.shape[0], size=(self.num_good,), replace=False)
-                seg_inds_0 = seg_inds_0[selected_inds]
-                seg_inds_1 = seg_inds_1[selected_inds]
-            else:
-                med_point_0 = np.median(seg_inds_0, axis=0)
-                dists_0 = np.linalg.norm(seg_inds_0 - med_point_0, axis=1)
-                min_dists_inds_0 = np.argsort(dists_0)
-                min_dists_inds_0 = min_dists_inds_0[0:self.num_good]
+        #randomly drop points independantly
+        drop_points(used_seg_inds_0, self.drop_point_thresh)
+        drop_points(used_seg_inds_1, self.drop_point_thresh)
 
-                med_point_1 = np.median(seg_inds_1, axis=0)
-                dists_1 = np.linalg.norm(seg_inds_1 - med_point_1, axis=1)
-                min_dists_inds_1 = np.argsort(dists_1)
-                min_dists_inds_1 = min_dists_inds_1[0:self.num_good]
+        #if more than num_points need to drop
+        #output of this does not mean array is length num_points,
+        #only the sum is less than
+        used_seg_inds_0 = select_valid_points(used_seg_inds_0, self.num_points)
+        used_seg_inds_1 = select_valid_points(used_seg_inds_1, self.num_points)
 
-                selected_inds = np.intersect1d(min_dists_inds_0, min_dists_inds_1, assume_unique=True)
-                seg_inds_0 = seg_inds_0[selected_inds]
-                seg_inds_1 = seg_inds_1[selected_inds]
-
-        num_bad_sample = num_segs - seg_inds_0.shape[0]
-        num_pad = np.ceil(np.sqrt(num_bad_sample) / 2).astype(int)
-
-        bad_sample_0 = self.get_bad_samples(seg_inds_0, num_pad, num_bad_sample)
-        bad_sample_1 = self.get_bad_samples(seg_inds_1, num_pad, num_bad_sample)
-
-        ###filter bad samples
-        good_inds_0 = np.where((bad_sample_0[:, 0] - self.window_length >= 0) & 
-                               (bad_sample_0[:, 0] + self.window_length < torch_im_0.shape[-1] - 1) & 
-                               (bad_sample_0[:, 1] - self.window_length >= 0) & 
-                               (bad_sample_0[:, 1] + self.window_length < torch_im_0.shape[-2] - 1))
-        bad_sample_0 = bad_sample_0[good_inds_0]
-        bad_sample_1 = bad_sample_1[good_inds_0]
-
-        good_inds_1 = np.where((bad_sample_1[:, 0] - self.window_length >= 0) & 
-                               (bad_sample_1[:, 0] + self.window_length < torch_im_1.shape[-1] - 1) & 
-                               (bad_sample_1[:, 1] - self.window_length >= 0) & 
-                               (bad_sample_1[:, 1] + self.window_length < torch_im_1.shape[-2] - 1))
-        bad_sample_0 = bad_sample_0[good_inds_1]
-        bad_sample_1 = bad_sample_1[good_inds_1]
-        ###
-
-        #matches_0 is the index in 1 that maps to that index in 0
-        #matches_1 is the index in 0 that maps to that index 1
-        matches_0 = np.concatenate((np.arange(seg_inds_0.shape[0]), np.zeros((bad_sample_0.shape[0]), dtype=int) - 1))
-        matches_1 = np.concatenate((np.arange(seg_inds_1.shape[0]), np.zeros((bad_sample_1.shape[0]), dtype=int) - 1))
-         
-        seg_inds_0 = np.concatenate((seg_inds_0, bad_sample_0), axis=0)
-        seg_inds_1 = np.concatenate((seg_inds_1, bad_sample_1), axis=0)
-
-        ###if not enough add more
-        if seg_inds_0.shape[0] < num_segs:
-            num_to_add = num_segs - seg_inds_0.shape[0]
-            new_inds = np.random.choice(seg_inds_0.shape[0], size=(num_to_add,), replace=True)
-
-            seg_inds_0 = np.concatenate((seg_inds_0, seg_inds_0[new_inds]), axis=0)
-            seg_inds_1 = np.concatenate((seg_inds_1, seg_inds_1[new_inds]), axis=0)
-            matches_0 = np.concatenate((matches_0, matches_0[new_inds]), axis=0)
-            matches_1 = np.concatenate((matches_1, matches_1[new_inds]), axis=0)
-        ###
-
+        #shuffle both
         if self.shuffle_inds:
-            #shuffle one at a time            
-            p_0 = np.random.permutation(seg_inds_0.shape[0])
-            seg_inds_0 = seg_inds_0[p_0]
-            matches_0 = matches_0[p_0]
+            perm = np.random.permutation(seg_inds_0.shape[0])
+            
+            seg_inds_0 = seg_inds_0[perm]
+            bgrs_0 = bgrs_0[perm]
+            used_seg_inds_0 = used_seg_inds_0[perm]
 
-            matched_inds = np.argwhere(matches_0 != -1)[:, 0]
-            matches_1[matches_0[matched_inds]] = matched_inds
+            seg_inds_1 = seg_inds_1[perm]
+            bgrs_1 = bgrs_1[perm]
+            used_seg_inds_1 = used_seg_inds_1[perm]
 
-            #shuffle one at a time            
-            p_1 = np.random.permutation(seg_inds_1.shape[0])
-            seg_inds_1 = seg_inds_1[p_1]
-            matches_1 = matches_1[p_1]
+        #select our segmentation indices and our matches
+        #used_seg_inds_0 and used_seg_inds_1 are done after this
+        seg_inds_0, bgrs_0 = select_points(used_seg_inds_0, seg_inds_0, bgrs_0)
+        seg_inds_1, bgrs_1 = select_points(used_seg_inds_1, seg_inds_1, bgrs_1)
 
-            matched_inds = np.argwhere(matches_1 != -1)[:, 0]
-            matches_0[matches_1[matched_inds]] = matched_inds
+        #use these for matching
+        inds_0 = np.arange(used_seg_inds_0.shape[0])[used_seg_inds_0]
+        inds_1 = np.arange(used_seg_inds_1.shape[0])[used_seg_inds_1]
 
-        pair_inds_0 = matches_0 > -1
-        pair_inds_1 = matches_1 > -1
+        #shuffle one now
+        #don't have to do other because we shuffled both before
+        if self.shuffle_inds:
+            perm = np.random.permutation(seg_inds_0.shape[0])
+            seg_inds_0 = seg_inds_0[perm]
+            bgrs_0 = bgrs_0[perm]
+            inds_0 = inds_0[perm]
 
-        if not (matches_1[matches_0[pair_inds_0]] == np.arange(matches_0.shape[0])[pair_inds_0]).all():
-            raise RuntimeError('Failed match check 0')
+        #and do our matches
+        matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1
+        matches_1 = np.zeros((seg_inds_1.shape[0]), dtype=int) - 1
+
+        dual_matches = np.where(inds_1.reshape(inds_1.size, 1) == inds_0)
+
+        matches_0[dual_matches[1]] = dual_matches[0]
+        matches_1[dual_matches[0]] = dual_matches[1]
+
+        if seg_inds_0.shape[0] > self.num_points:
+            raise RuntimeError('seg_inds_0 too large, something is wrong')
+
+        if seg_inds_1.shape[0] > self.num_points:
+            raise RuntimeError('seg_inds_1 too large, something is wrong')
         
-        if not (matches_0[matches_1[pair_inds_1]] == np.arange(matches_1.shape[0])[pair_inds_1]).all():
-            raise RuntimeError('Failed match check 1')
+        #now we can add masked points
+        seg_inds_0, bgrs_0, matches_0, is_mask_0, num_mask_0 = create_mask(seg_inds_0, bgrs_0, matches_0, self.num_points)
+        seg_inds_1, bgrs_1, matches_1, is_mask_1, num_mask_1 = create_mask(seg_inds_1, bgrs_1, matches_1, self.num_points)
 
-        if not ((seg_inds_0.shape[0] == seg_inds_1.shape[0]) and (seg_inds_0.shape[0] == num_segs)):
-            raise RuntimeError("Something wrong #2, seg inds should be equal size")
-
-        window_size = 2*self.window_length
-        bgrs_0 = torch.zeros((num_segs, 3, window_size, window_size), dtype=torch_im_0.dtype)
-        bgrs_1 = torch.zeros((num_segs, 3, window_size, window_size), dtype=torch_im_1.dtype)
-        for ind in range(num_segs):
-            x_0, y_0 = seg_inds_0[ind]
-            x_1, y_1 = seg_inds_1[ind]
-
-            window_0 = torch_im_0[0, :, y_0-self.window_length:y_0+self.window_length, x_0-self.window_length:x_0+self.window_length]
-            window_1 = torch_im_1[0, :, y_1-self.window_length:y_1+self.window_length, x_1-self.window_length:x_1+self.window_length]
-
-            bgrs_0[ind] = window_0
-            bgrs_1[ind] = window_1 
-
-        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, matches_0, matches_1
-
+        #return
+        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1
+   
 def get_data_loader(images_dir, segmentations_dir, window_length,
-                    num_good, num_bad, batch_size, shuffle):
-    dataset = FeatureDataset(images_dir, segmentations_dir, window_length, num_good, num_bad)
+                    num_points, batch_size, shuffle):
+    dataset = FeatureDataset(images_dir, segmentations_dir, window_length, num_points)
     dloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
 
     return dloader

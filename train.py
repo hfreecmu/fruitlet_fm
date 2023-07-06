@@ -4,59 +4,33 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from data.dataloader import get_data_loader
-from models.nbv_models import load_feature_encoder, positional_encoder, Transformer
+from models.nbv_models import TransformerAssociator, prep_feature_data
 from utils.torch_utils import save_checkpoint, plot_loss
-
-def log_sinkhorn_iterations(Z: torch.Tensor, log_mu: torch.Tensor, log_nu: torch.Tensor, iters: int) -> torch.Tensor:
-    """ Perform Sinkhorn Normalization in Log-space for stability"""
-    u, v = torch.zeros_like(log_mu), torch.zeros_like(log_nu)
-    for _ in range(iters):
-        u = log_mu - torch.logsumexp(Z + v.unsqueeze(1), dim=2)
-        v = log_nu - torch.logsumexp(Z + u.unsqueeze(2), dim=1)
-    return Z + u.unsqueeze(2) + v.unsqueeze(1)
-
-def log_optimal_transport(scores: torch.Tensor, alpha: torch.Tensor, iters: int) -> torch.Tensor:
-    """ Perform Differentiable Optimal Transport in Log-space for stability"""
-    b, m, n = scores.shape
-    one = scores.new_tensor(1)
-    ms, ns = (m*one).to(scores), (n*one).to(scores)
-
-    bins0 = alpha.expand(b, m, 1)
-    bins1 = alpha.expand(b, 1, n)
-    alpha = alpha.expand(b, 1, 1)
-
-    couplings = torch.cat([torch.cat([scores, bins0], -1),
-                           torch.cat([bins1, alpha], -1)], 1)
-
-
-    norm = - (ms + ns).log()
-    log_mu = torch.cat([norm.expand(m), ns.log()[None] + norm])
-    log_nu = torch.cat([norm.expand(n), ms.log()[None] + norm])
-    log_mu, log_nu = log_mu[None].expand(b, -1), log_nu[None].expand(b, -1)
-
-    Z = log_sinkhorn_iterations(couplings, log_mu, log_nu, iters)
-    Z = Z - norm  # multiply probabilities by M+N
-    return Z
 
 def train(opt):
     dataloader = get_data_loader(opt.images_dir, opt.segmentations_dir,
                                  opt.window_length,
-                                 opt.num_good, opt.num_bad,
+                                 opt.num_points,
                                  opt.batch_size, opt.shuffle)
     
     width, height = opt.width, opt.height
-    dims = [32, 32, 64, 64, 128, 128]
-    strides = [2, 1, 2, 1, 2, 2]
-    feature_encoder = load_feature_encoder(dims, strides, device=opt.device)
+    dims = [32, 32, 64, 64, 128]
+    strides = [2, 2, 2, 2, 2]
 
-    transformer = Transformer(n_layers=opt.transformer_layers, d_model=dims[-1]).to(opt.device)
+    transformer = TransformerAssociator(dims, strides,
+                                        opt.transformer_layers, dims[-1], opt.dim_feedforward,
+                                        opt.dual_softmax,
+                                        opt.sinkhorn_iterations,
+                                        opt.device).to(opt.device)
 
     ###optimizers
-    feature_optimizer = optim.Adam(feature_encoder.parameters(), opt.conv_lr)
-    transformer_optimizer = optim.Adam(transformer.parameters(), opt.trans_lr)
+    feature_optimizer = optim.Adam(transformer.encoder.parameters(), opt.conv_lr)
+    bin_optimizer = optim.Adam([transformer.bin_score], opt.bin_lr)
+    transformer_optimizer = optim.Adam(transformer.transformer.parameters(), opt.trans_lr)
 
     milestones = [20000, 30000, 40000, 45000]
     feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
+    bin_scheduler = optim.lr_scheduler.MultiStepLR(bin_optimizer, milestones=milestones, gamma=0.5)
     transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
     ###
 
@@ -68,72 +42,26 @@ def train(opt):
                 losses = 0
                 num_losses = 0
 
-            _, _, bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, matches_0, matches_1 = data
-            
+            _, _, bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, _, _, matches_0, matches_1 = data
+
             num_images = bgrs_0.shape[0]
 
-            bgrs_0 = bgrs_0.float() / 255
-            bgrs_0 = bgrs_0.to(opt.device)
-            bgrs_1 = bgrs_1.float() / 255
-            bgrs_1 = bgrs_1.to(opt.device)
+            bgrs_0, positional_encodings_0 = prep_feature_data(seg_inds_0, bgrs_0, dims[-1], 
+                                                               width, height, opt.device)
+            bgrs_1, positional_encodings_1 = prep_feature_data(seg_inds_1, bgrs_1, dims[-1], 
+                                                               width, height, opt.device)
 
-            seg_inds_0 = seg_inds_0.float()
-            seg_inds_1 = seg_inds_1.float()
-            seg_inds_0[:, :, 0] = (2*seg_inds_0[:, :, 0] - width) / width
-            seg_inds_0[:, :, 1] = (2*seg_inds_0[:, :, 1] - height) / height
-            seg_inds_1[:, :, 0] = (2*seg_inds_1[:, :, 0] - width) / width
-            seg_inds_1[:, :, 1] = (2*seg_inds_1[:, :, 1] - height) / height
+            x_0 = (bgrs_0, positional_encodings_0, is_mask_0)
+            x_1 = (bgrs_1, positional_encodings_1, is_mask_1)
 
-            positional_encodings_0 = positional_encoder(seg_inds_0, dims[-1]//4)
-            positional_encodings_1 = positional_encoder(seg_inds_1, dims[-1]//4)
-            positional_encodings_0 = positional_encodings_0.to(opt.device)
-            positional_encodings_1 = positional_encodings_1.to(opt.device)
-
-            num_segs = opt.num_good + opt.num_bad
-            features_0 = torch.zeros((num_images, num_segs, dims[-1])).float().to(opt.device)
-            features_1 = torch.zeros((num_images, num_segs, dims[-1]), dtype=float).float().to(opt.device)
-
-            #TODO make one cnn call if speed is an issue?
-            for image_ind in range(num_images):
-                features_0[image_ind] = feature_encoder(bgrs_0[image_ind]).reshape((-1, dims[-1]))
-                features_1[image_ind] = feature_encoder(bgrs_1[image_ind]).reshape((-1, dims[-1]))
-
-            src_0 = features_0 + positional_encodings_0
-            src_1 = features_1 + positional_encodings_1
-
-            desc_0, desc_1 = transformer(src_0, src_1)
-
-            desc_0 = torch.permute(desc_0, (0, 2, 1))
-            desc_1 = torch.permute(desc_1, (0, 2, 1))
-
-            #TODO can use other method as described in 
-            #https://arxiv.org/pdf/2104.00680.pdf?
-            if opt.dual_softmax:
-                #dustbin_i = transformer.bin_i_score.expand(desc_0.shape[0], dims[-1]).reshape((-1, dims[-1], 1))
-                #desc_0 = torch.cat((desc_0, dustbin_i), axis=2)
-
-                #dustbin_j = transformer.bin_j_score.expand(desc_1.shape[0], dims[-1]).reshape((-1, dims[-1], 1))
-                #desc_1 = torch.cat((desc_1, dustbin_j), axis=2)
-
-                scores = torch.einsum('bdn,bdm->bnm', desc_0, desc_1)
-                scores = scores / dims[-1]
-
-                #TODO are these axis right?
-                S_i = F.softmax(scores, dim=1)
-                S_j = F.softmax(scores, dim=2)
-                scores = torch.log(S_i*S_j)
-            else:
-                scores = torch.einsum('bdn,bdm->bnm', desc_0, desc_1)
-                scores = scores / dims[-1]**.5
-                ot_scores = []
-                for image_ind in range(num_images):
-                     ot_scores.append(log_optimal_transport(scores[image_ind:image_ind+1], transformer.bin_score, iters=opt.sinkhorn_iterations))
-                scores = torch.concatenate(ot_scores, dim=0)
+            scores = transformer(x_0, x_1)
 
             loss = []
+            #this works because masks were appended
             for image_ind in range(num_images):
                 ind_scores = scores[image_ind]
-
+                
+                #this accounts for mask
                 has_match_i = (matches_0[image_ind] != -1)
                 has_match_j = (matches_1[image_ind] != -1)
 
@@ -141,28 +69,37 @@ def train(opt):
                 matched_inds_i = torch.arange(matches_0[image_ind].shape[0])[has_match_i]
                 matched_inds_j = matches_0[image_ind, has_match_i]
 
-                unmatched_inds_i = torch.arange(matches_0[image_ind].shape[0])[~has_match_i]
-                unmatched_inds_j = torch.arange(matches_1[image_ind].shape[0])[~has_match_j]
+                is_mask_i = is_mask_0[image_ind]
+                is_mask_j = is_mask_1[image_ind]
+
+                has_unmatched_i = ((~has_match_i) & (~is_mask_i))
+                has_unmatched_j = ((~has_match_j) & (~is_mask_j))
+
+                unmatched_inds_i = torch.arange(matches_0[image_ind].shape[0])[has_unmatched_i]
+                unmatched_inds_j = torch.arange(matches_1[image_ind].shape[0])[has_unmatched_j]
 
                 matched_scores = ind_scores[matched_inds_i, matched_inds_j]
-                unmatched_i_scores = 0.5*ind_scores[unmatched_inds_i, matches_0[image_ind].shape[0]]
-                unmatched_j_scores = 0.5*ind_scores[matches_1[image_ind].shape[0], unmatched_inds_j]
+                unmatched_i_scores = opt.unmatch_scale*ind_scores[unmatched_inds_i, ind_scores.shape[1] - 1]
+                unmatched_j_scores = opt.unmatch_scale*ind_scores[ind_scores.shape[0] - 1, unmatched_inds_j]
 
                 loss_scores = torch.concatenate((matched_scores, unmatched_i_scores, unmatched_j_scores))
-                #loss_scores = matched_scores
 
                 ind_loss = torch.mean(-loss_scores)
                 loss.append(ind_loss)
 
             loss = torch.mean(torch.stack((loss)))
             feature_optimizer.zero_grad()
+            bin_optimizer.zero_grad()
             transformer_optimizer.zero_grad()
             loss.backward()
             feature_optimizer.step()
+            bin_optimizer.step()
             transformer_optimizer.step()
 
-            feature_scheduler.step()
-            transform_scheduler.step()
+            for step_sched in range(num_images):
+                feature_scheduler.step()
+                bin_scheduler.step()
+                transform_scheduler.step()
 
             losses += loss.item()
             num_losses += 1
@@ -180,7 +117,7 @@ def train(opt):
 
             if ((step_num + 1) % opt.log_checkpoints) == 0:
                 print('saving checkpoint for step: ', step_num + 1)
-                save_checkpoint(step_num + 1, opt.checkpoint_dir, feature_encoder, transformer) 
+                save_checkpoint(step_num + 1, opt.checkpoint_dir, transformer) 
 
             step_num += 1
 
@@ -192,21 +129,23 @@ def parse_args():
     parser.add_argument('--images_dir', required=True)
     parser.add_argument('--segmentations_dir', required=True)
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
-    parser.add_argument('--window_length', type=int, default=8)
-    parser.add_argument('--num_good', type=int, default=1000)
-    parser.add_argument('--num_bad', type=int, default=1000)
+    parser.add_argument('--window_length', type=int, default=16)
+    parser.add_argument('--num_points', type=int, default=2000)
     parser.add_argument('--transformer_layers', type=int, default=2)
+    parser.add_argument('--dim_feedforward', type=int, default=1024)
     parser.add_argument('--dual_softmax', action='store_true')
-    parser.add_argument('--sinkhorn_iterations', type=int, default=100)
+    parser.add_argument('--sinkhorn_iterations', type=int, default=25)
+    parser.add_argument('--unmatch_scale', type=float, default=0.5)
 
-    parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--shuffle', action='store_false')
     parser.add_argument('--trans_lr', type=float, default=1e-4)
     parser.add_argument('--conv_lr', type=float, default=1e-3)
+    parser.add_argument('--bin_lr', type=float, default=1e-3)
 
-    parser.add_argument('--num_steps', type=int, default=50000)
-    parser.add_argument('--log_steps', type=int, default=100)
-    parser.add_argument('--log_checkpoints', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--num_steps', type=int, default=25000)
+    parser.add_argument('--log_steps', type=int, default=50)
+    parser.add_argument('--log_checkpoints', type=int, default=50)
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)

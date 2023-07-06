@@ -131,7 +131,12 @@ class TransformerEncoderLayer(Module):
             #src: Tensor,
             src0: Tensor,
             src1: Tensor,
-            src_mask: Optional[Tensor] = None,
+            src00_mask_orig: Optional[Tensor] = None,
+            src01_mask_orig: Optional[Tensor] = None,
+            src10_mask_orig: Optional[Tensor] = None,
+            src11_mask_orig: Optional[Tensor] = None,
+            src_mask_dummy: Optional[Tensor] = None,
+            #src_mask: Optional[Tensor] = None,
             src_key_padding_mask: Optional[Tensor] = None,
             is_causal: bool = False) -> Tensor:
         r"""Pass the input through the encoder layer.
@@ -154,14 +159,50 @@ class TransformerEncoderLayer(Module):
         src_key_padding_mask = F._canonical_mask(
             mask=src_key_padding_mask,
             mask_name="src_key_padding_mask",
-            other_type=F._none_or_dtype(src_mask),
+            other_type=F._none_or_dtype(src_mask_dummy),
             other_name="src_mask",
             target_type=src0.dtype
         )
 
-        src_mask = F._canonical_mask(
-            mask=src_mask,
-            mask_name="src_mask",
+        # src_mask = F._canonical_mask(
+        #     mask=src_mask,
+        #     mask_name="src_mask",
+        #     other_type=None,
+        #     other_name="",
+        #     target_type=src0.dtype,
+        #     check_other=False,
+        # )
+
+        src00_mask = F._canonical_mask(
+            mask=src00_mask_orig,
+            mask_name="src00_mask",
+            other_type=None,
+            other_name="",
+            target_type=src0.dtype,
+            check_other=False,
+        )
+
+        src01_mask = F._canonical_mask(
+            mask=src01_mask_orig,
+            mask_name="src01_mask",
+            other_type=None,
+            other_name="",
+            target_type=src0.dtype,
+            check_other=False,
+        )
+
+        src10_mask = F._canonical_mask(
+            mask=src10_mask_orig,
+            mask_name="src10_mask",
+            other_type=None,
+            other_name="",
+            target_type=src0.dtype,
+            check_other=False,
+        )
+
+        src11_mask = F._canonical_mask(
+            mask=src11_mask_orig,
+            mask_name="src11_mask",
             other_type=None,
             other_name="",
             target_type=src0.dtype,
@@ -243,14 +284,14 @@ class TransformerEncoderLayer(Module):
                     merged_mask,
                     mask_type,
                 )
-
+        
         if self.norm_first:
             if self.name == "self":
-                src0 = src0 + self._sa_block(self.norm1(src0), self.norm1(src0), src_mask, src_key_padding_mask, is_causal=is_causal)
-                src1 = src1 + self._sa_block(self.norm1(src1), self.norm1(src1), src_mask, src_key_padding_mask, is_causal=is_causal)
+                src0 = src0 + self._sa_block(self.norm1(src0), self.norm1(src0), src00_mask, src_key_padding_mask, is_causal=is_causal)
+                src1 = src1 + self._sa_block(self.norm1(src1), self.norm1(src1), src11_mask, src_key_padding_mask, is_causal=is_causal)
             elif self.name == "cross":
-                src0_new = src0 + self._sa_block(self.norm1(src0), self.norm1(src1), src_mask, src_key_padding_mask, is_causal=is_causal)
-                src1_new = src1 + self._sa_block(self.norm1(src1), self.norm1(src0), src_mask, src_key_padding_mask, is_causal=is_causal)
+                src0_new = src0 + self._sa_block(self.norm1(src0), self.norm1(src1), src01_mask, src_key_padding_mask, is_causal=is_causal)
+                src1_new = src1 + self._sa_block(self.norm1(src1), self.norm1(src0), src10_mask, src_key_padding_mask, is_causal=is_causal)
                 src0 = src0_new
                 src1 = src1_new
             else:
@@ -260,11 +301,11 @@ class TransformerEncoderLayer(Module):
             src1 = src1 + self._ff_block(self.norm2(src1))
         else:
             if self.name == "self":
-                src0 = self.norm1(src0 + self._sa_block(src0, src0, src_mask, src_key_padding_mask, is_causal=is_causal))
-                src1 = self.norm1(src1 + self._sa_block(src1, src1, src_mask, src_key_padding_mask, is_causal=is_causal))
+                src0 = self.norm1(src0 + self._sa_block(src0, src0, src00_mask, src_key_padding_mask, is_causal=is_causal))
+                src1 = self.norm1(src1 + self._sa_block(src1, src1, src11_mask, src_key_padding_mask, is_causal=is_causal))
             elif self.name == "cross":
-                src0_new = self.norm1(src0 + self._sa_block(src0, src1, src_mask, src_key_padding_mask, is_causal=is_causal))
-                src1_new = self.norm1(src1 + self._sa_block(src1, src0, src_mask, src_key_padding_mask, is_causal=is_causal))
+                src0_new = self.norm1(src0 + self._sa_block(src0, src1, src01_mask, src_key_padding_mask, is_causal=is_causal))
+                src1_new = self.norm1(src1 + self._sa_block(src1, src0, src10_mask, src_key_padding_mask, is_causal=is_causal))
                 src0 = src0_new
                 src1 = src1_new
             else:
@@ -278,6 +319,7 @@ class TransformerEncoderLayer(Module):
     # self-attention block
     def _sa_block(self, x: Tensor, y: Tensor,
                   attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor], is_causal: bool = False) -> Tensor:
+        
         x = self.self_attn(x, y, y,
                            attn_mask=attn_mask,
                            key_padding_mask=key_padding_mask,
