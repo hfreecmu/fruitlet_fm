@@ -32,7 +32,7 @@ def infer(opt):
     image_num = 0    
     with torch.no_grad():
         for _, data in enumerate(dataloader):
-            torch_im_0, torch_im_1, bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, _, _, matches_0, matches_1 = data
+            torch_im_0, torch_im_1, bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, _, _, matches_0, matches_1, is_aug = data
 
             num_images = bgrs_0.shape[0]
             if not (num_images == 1):
@@ -77,9 +77,10 @@ def infer(opt):
             gt_is_match = (matches_0[image_ind] != -1)
             gt_inds_0 = np.arange(seg_inds_0.shape[1])[gt_is_match]
             gt_inds_1 = matches_0[image_ind, gt_is_match].numpy()
-            rand_inds = np.random.choice(gt_inds_0.shape[0], size=(opt.top_n,), replace=False)
-            gt_inds_0 = gt_inds_0[rand_inds]
-            gt_inds_1 = gt_inds_1[rand_inds]
+            if gt_inds_0.shape[0] > 0:
+                rand_inds = np.random.choice(gt_inds_0.shape[0], size=(opt.top_n,), replace=False)
+                gt_inds_0 = gt_inds_0[rand_inds]
+                gt_inds_1 = gt_inds_1[rand_inds]
 
             gt_output_filename = str(image_num) + '_gt_matches.png'
             gt_output_path = os.path.join(opt.vis_dir, gt_output_filename)
@@ -104,9 +105,9 @@ def parse_args():
     parser.add_argument('--transformer_layers', type=int, default=2)
     parser.add_argument('--dim_feedforward', type=int, default=1024)
     parser.add_argument('--dual_softmax', action='store_true')
-    parser.add_argument('--sinkhorn_iterations', type=int, default=25)
+    parser.add_argument('--sinkhorn_iterations', type=int, default=10)
 
-    parser.add_argument('--match_threshold', type=float, default=0.2)
+    parser.add_argument('--match_threshold', type=float, default=0.1)
     parser.add_argument('--top_n', type=int, default=10)
     parser.add_argument('--num_images', type=int, default=5)
     parser.add_argument('--use_dustbin', action='store_false')

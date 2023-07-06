@@ -156,13 +156,13 @@ def parse_args():
     
     parser.add_argument('--checkpoint_epoch', type=int, required=True)
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
-    parser.add_argument('--vis_dir', type=str, default='./vis')
+    parser.add_argument('--vis_dir', type=str, default='./vis/feature_match')
     parser.add_argument('--window_length', type=int, default=16)
     parser.add_argument('--num_points', type=int, default=2000)
     parser.add_argument('--transformer_layers', type=int, default=2)
     parser.add_argument('--dim_feedforward', type=int, default=1024)
     parser.add_argument('--dual_softmax', action='store_true')
-    parser.add_argument('--sinkhorn_iterations', type=int, default=25)
+    parser.add_argument('--sinkhorn_iterations', type=int, default=10)
 
     parser.add_argument('--match_threshold', type=float, default=0.1)
     parser.add_argument('--top_n', type=int, default=20)
@@ -187,9 +187,9 @@ data_dir = '/home/frc-ag-3/harry_ws/fruitlet_2023/nbv/debug_bag'
 fruitlet_pairs = [((2, 3), (3, 6)),
                   ((5, 3), (3, 6))]
 
-# fruitlet_pairs = [((2, 3), (3, 6)),
-#                   ((5, 3), (3, 6)),
-#                   ((2, 3), (6, 7))]
+fruitlet_pairs = [((2, 3), (3, 6)),
+                  ((5, 3), (3, 6)),
+                  ((2, 3), (6, 7))]
 
 # fruitlet_pairs = [((2, 3), (6, 7))]
 

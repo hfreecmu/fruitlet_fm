@@ -28,7 +28,7 @@ def train(opt):
     bin_optimizer = optim.Adam([transformer.bin_score], opt.bin_lr)
     transformer_optimizer = optim.Adam(transformer.transformer.parameters(), opt.trans_lr)
 
-    milestones = [20000, 30000, 40000, 45000]
+    milestones = [30000, 50000, 55000, 57500, 60000]
     feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
     bin_scheduler = optim.lr_scheduler.MultiStepLR(bin_optimizer, milestones=milestones, gamma=0.5)
     transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
@@ -42,7 +42,7 @@ def train(opt):
                 losses = 0
                 num_losses = 0
 
-            _, _, bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, _, _, matches_0, matches_1 = data
+            _, _, bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, _, _, matches_0, matches_1, is_aug = data
 
             num_images = bgrs_0.shape[0]
 
@@ -134,18 +134,18 @@ def parse_args():
     parser.add_argument('--transformer_layers', type=int, default=2)
     parser.add_argument('--dim_feedforward', type=int, default=1024)
     parser.add_argument('--dual_softmax', action='store_true')
-    parser.add_argument('--sinkhorn_iterations', type=int, default=25)
+    parser.add_argument('--sinkhorn_iterations', type=int, default=10)
     parser.add_argument('--unmatch_scale', type=float, default=0.5)
 
     parser.add_argument('--shuffle', action='store_false')
-    parser.add_argument('--trans_lr', type=float, default=1e-4)
+    parser.add_argument('--trans_lr', type=float, default=1e-5)
     parser.add_argument('--conv_lr', type=float, default=1e-3)
     parser.add_argument('--bin_lr', type=float, default=1e-3)
 
-    parser.add_argument('--batch_size', type=int, default=2)
-    parser.add_argument('--num_steps', type=int, default=25000)
-    parser.add_argument('--log_steps', type=int, default=50)
-    parser.add_argument('--log_checkpoints', type=int, default=50)
+    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--num_steps', type=int, default=15000)
+    parser.add_argument('--log_steps', type=int, default=25)
+    parser.add_argument('--log_checkpoints', type=int, default=25)
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)

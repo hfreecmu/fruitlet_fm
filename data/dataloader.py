@@ -21,7 +21,7 @@ class FeatureDataset(Dataset):
                  affine_thresh=0.3, #percentage of using affine thresh
                  aug_orig_thresh=0.3, #percentage of augmenting original image
                  aug_bright_orig_thresh=0.4, #if not augment original image, whether or not to randomly brighten
-                 other_match_thresh=0.2, #percentage of matching against two different fruitlets
+                 other_match_thresh=0.25, #percentage of matching against two different fruitlets
                  other_attempts=5, #number of attempts to try this if there is a bug
                  cluster_match_thresh=0.5, #if above, percentage of matching with fruitlet from same cluster
                  swap_thresh=0.5, #whether to swap two images
@@ -128,7 +128,7 @@ class FeatureDataset(Dataset):
     
     def __getitem__(self, idx):
         use_other_match = np.random.random() < self.other_match_thresh
-        if False and use_other_match:
+        if use_other_match:
             func = self.get_other_item
         else:
             func = self.get_aug_item
@@ -142,7 +142,7 @@ class FeatureDataset(Dataset):
                     #revert to what we know
                     return self.get_aug_item(idx)
             except Exception as e:
-                print('Error in data loader')
+                print('Error in data loader: ', use_other_match)
                 num_attempts += 1
                 if ((num_attempts == self.other_attempts) and (use_other_match)):
                     print('Num attempts exceeded other attempts')
@@ -263,7 +263,7 @@ class FeatureDataset(Dataset):
         seg_inds_1, bgrs_1, matches_1, is_mask_1, num_mask_1 = create_mask(seg_inds_1, bgrs_1, matches_1, self.num_points)
 
         #return
-        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1
+        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1, False
 
     def get_aug_item(self, idx):
         img_path_locs, seg_path_locs, seg_ind_locs = self.paths[idx]
@@ -363,7 +363,7 @@ class FeatureDataset(Dataset):
         seg_inds_1, bgrs_1, matches_1, is_mask_1, num_mask_1 = create_mask(seg_inds_1, bgrs_1, matches_1, self.num_points)
 
         #return
-        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1
+        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1, True
    
 def get_data_loader(images_dir, segmentations_dir, window_length,
                     num_points, batch_size, shuffle):
