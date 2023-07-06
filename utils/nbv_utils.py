@@ -268,7 +268,7 @@ def select_points(valid_inds_bool, seg_inds, bgr_vals):
     return seg_inds[valid_inds_bool], bgr_vals[valid_inds_bool]
 
 #visualize feature matches
-def vis(torch_im_0, torch_im_1, torch_points_0, torch_points_1, output_path, padding=20):
+def vis_lines(torch_im_0, torch_im_1, torch_points_0, torch_points_1, output_path, padding=20):
     cv_im_0 = torch_im_0.permute(1, 2, 0).numpy().copy()
     cv_im_1 = torch_im_1.permute(1, 2, 0).numpy().copy()
 
@@ -293,5 +293,34 @@ def vis(torch_im_0, torch_im_1, torch_points_0, torch_points_1, output_path, pad
         x1 += width + padding
 
         cv2.line(comb_im, (x0, y0), (x1, y1), color, thickness=1)
+
+    cv2.imwrite(output_path, comb_im)
+
+def vis_segs(torch_im_0, torch_im_1, torch_points_0, torch_points_1, output_path, padding=20):
+    cv_im_0 = torch_im_0.permute(1, 2, 0).numpy().copy()
+    cv_im_1 = torch_im_1.permute(1, 2, 0).numpy().copy()
+
+    width = cv_im_0.shape[1]
+    height = cv_im_0.shape[0]
+
+    points_0 = torch_points_0.numpy().copy()
+    points_1 = torch_points_1.numpy().copy()
+
+    comb_im = np.zeros((height, 2*width+ padding, 3))
+    comb_im[:, 0:width] = cv_im_0
+    comb_im[:, width+padding:] = cv_im_1
+
+    num_colors = 20
+    colors = distinctipy.get_colors(num_colors)
+    for i in range(points_0.shape[0]):
+        color = colors[i % num_colors]
+        color = ([int(255*color[0]), int(255*color[1]), int(255*color[2])])
+
+        x0, y0 = points_0[i]
+        x1, y1 = points_1[i]
+        x1 += width + padding
+
+        cv2.circle(comb_im, (x0, y0), 1, (255, 0, 0), thickness=-1)
+        cv2.circle(comb_im, (x1, y1), 1, (255, 0, 0), thickness=-1)
 
     cv2.imwrite(output_path, comb_im)
