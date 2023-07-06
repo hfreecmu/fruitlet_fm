@@ -10,6 +10,10 @@ from utils.nbv_utils import select_valid_points, select_points
 from utils.torch_utils import load_torch_image, load_feature_inputs
 from utils.torch_utils import create_mask
 
+def throwRuntimeError(msg):
+    print(msg)
+    raise RuntimeError(msg)
+
 #TODO add bad points back in?
 #TODO add centroid back in?
 class FeatureDataset(Dataset):
@@ -143,6 +147,8 @@ class FeatureDataset(Dataset):
                     return self.get_aug_item(idx)
             except Exception as e:
                 print('Error in data loader: ', use_other_match)
+                if hasattr(e, 'message'):
+                    print(e.message)
                 num_attempts += 1
                 if ((num_attempts == self.other_attempts) and (use_other_match)):
                     print('Num attempts exceeded other attempts')
@@ -156,14 +162,22 @@ class FeatureDataset(Dataset):
             #if yes, read segmentation from same path but different idx
             rand_segmentations = read_pickle(seg_path_locs_0)
             rand_ind_idx = seg_ind_locs_0
-            while rand_ind_idx == seg_ind_locs_0:
+            for i in range(5):
                 rand_ind_idx = np.random.randint(0, len(rand_segmentations))
+                if rand_ind_idx != seg_ind_locs_0:
+                    break
+            if rand_ind_idx == seg_ind_locs_0:
+                throwRuntimeError('Could not find other segmentation in cluster match')
             img_path_locs_1, seg_path_locs_1, seg_ind_locs_1 = img_path_locs_0, seg_path_locs_0, rand_ind_idx
         else:
             #if not, read segmentation from different path
             rand_idx = idx
-            while rand_idx == idx:
+            for i in range(5):
                 rand_idx = np.random.randint(0, len(self.paths))
+                if rand_idx != idx:
+                    break
+            if rand_idx == idx:
+                throwRuntimeError('Could not find rand segmentation')
             img_path_locs_1, seg_path_locs_1, seg_ind_locs_1 = self.paths[rand_idx]
 
         #load torch image and whether it was randomly flippped
@@ -174,7 +188,7 @@ class FeatureDataset(Dataset):
         if cluster_match:
             torch_im_1, _, flip_1 = load_torch_image(img_path_locs_1, rand_flip=self.rand_flip, force_flip=flip_0)
             if flip_0 != flip_1:
-                raise RuntimeError('flip_0 and flip_1 must match use_self_match')
+                throwRuntimeError('flip_0 and flip_1 must match use_self_match')
         else:
             torch_im_1, _, flip_1 = load_torch_image(img_path_locs_1, rand_flip=self.rand_flip)
 
@@ -253,10 +267,10 @@ class FeatureDataset(Dataset):
         matches_1 = np.zeros((seg_inds_1.shape[0]), dtype=int) - 1
 
         if seg_inds_0.shape[0] > self.num_points:
-            raise RuntimeError('seg_inds_0 too large, something is wrong')
+            throwRuntimeError('seg_inds_0 too large, something is wrong')
 
         if seg_inds_1.shape[0] > self.num_points:
-            raise RuntimeError('seg_inds_1 too large, something is wrong')
+            throwRuntimeError('seg_inds_1 too large, something is wrong')
         
         #now we can add masked points
         seg_inds_0, bgrs_0, matches_0, is_mask_0, num_mask_0 = create_mask(seg_inds_0, bgrs_0, matches_0, self.num_points)
@@ -353,10 +367,10 @@ class FeatureDataset(Dataset):
         matches_1[dual_matches[0]] = dual_matches[1]
 
         if seg_inds_0.shape[0] > self.num_points:
-            raise RuntimeError('seg_inds_0 too large, something is wrong')
+            throwRuntimeError('seg_inds_0 too large, something is wrong')
 
         if seg_inds_1.shape[0] > self.num_points:
-            raise RuntimeError('seg_inds_1 too large, something is wrong')
+            throwRuntimeError('seg_inds_1 too large, something is wrong')
         
         #now we can add masked points
         seg_inds_0, bgrs_0, matches_0, is_mask_0, num_mask_0 = create_mask(seg_inds_0, bgrs_0, matches_0, self.num_points)

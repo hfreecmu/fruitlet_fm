@@ -5,14 +5,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 #img is returned unsqueezed
-def load_torch_image(imfile, rand_flip, force_flip=False):
+def load_torch_image(imfile, rand_flip, force_flip=None):
     im = cv2.imread(imfile)
     flip=False
     if rand_flip:
-        if not force_flip:
+        if force_flip is None:
             hflip = np.random.random() < 0.5
         else:
-            hflip = True
+            hflip = force_flip
         if hflip:
             im = cv2.flip(im, 2)
             flip=True
