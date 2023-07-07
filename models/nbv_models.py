@@ -171,7 +171,7 @@ class TransformerAssociator(nn.Module):
             bin_score = torch.nn.Parameter(torch.tensor(1.))
             self.register_parameter('bin_score', bin_score)
         else:
-            raise RuntimeError('dual softmax not supported yet')
+            #raise RuntimeError('dual softmax not supported yet')
             dustbin_scores = torch.nn.Parameter(torch.tensor([1.]*d_model))
             self.register_parameter('bin_score', dustbin_scores)
 
@@ -219,10 +219,18 @@ class TransformerAssociator(nn.Module):
             desc_0 = desc_0.reshape((1, -1, desc_0.shape[-1]))
             desc_1 = desc_1.reshape((1, -1, desc_1.shape[-1]))
 
-            #used to be torch einsum thing
-            ot_score = torch.matmul(desc_0[0], desc_1[0].T).unsqueeze(0)
-            ot_score = ot_score / desc_0.shape[-1]**.5
-            ot_score = log_optimal_transport(ot_score, self.bin_score, iters=self.sinkhorn_iterations)
+            if not self.dual_softmax:
+                #used to be torch einsum thing
+                ot_score = torch.matmul(desc_0[0], desc_1[0].T).unsqueeze(0)
+                ot_score = ot_score / desc_0.shape[-1]**.5
+                ot_score = log_optimal_transport(ot_score, self.bin_score, iters=self.sinkhorn_iterations)
+            else:
+                desc_0 = torch.cat((desc_0, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
+                desc_1 = torch.cat((desc_1, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
+                ot_score = torch.matmul(desc_0[0], desc_1[0].T)
+                ot_score = ot_score / desc_0.shape[-1]**.5
+                ot_score = F.log_softmax(ot_score, dim=0) + F.log_softmax(ot_score, dim=1)
+                ot_score = ot_score.unsqueeze(0)
 
             scores.append(ot_score.squeeze(0))
             is_features_0.append(is_feature_0)

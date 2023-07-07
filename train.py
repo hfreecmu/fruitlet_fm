@@ -43,7 +43,7 @@ def train(opt):
     bin_optimizer = optim.Adam([transformer.bin_score], opt.bin_lr)
     transformer_optimizer = optim.Adam(transformer.transformer.parameters(), opt.trans_lr)
 
-    milestones = [6000, 12000, 18000, 24000, 30000]
+    milestones = [10000, 20000, 30000, 40000, 50000]
     feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
     bin_scheduler = optim.lr_scheduler.MultiStepLR(bin_optimizer, milestones=milestones, gamma=0.5)
     transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
@@ -192,7 +192,7 @@ def train(opt):
 
                 total_match_loss = -(match_loss + opt.unmatch_scale*unmatch_i_loss + opt.unmatch_scale*unmatch_j_loss) / num_total
 
-                loss.append(total_match_loss + bce_loss_0 + bce_loss_1)
+                loss.append(total_match_loss + 0.5*bce_loss_0 + 0.5*bce_loss_1)
 
             loss = torch.mean(torch.stack((loss)))
             feature_optimizer.zero_grad()
@@ -236,19 +236,19 @@ def parse_args():
     parser.add_argument('--images_dir', required=True)
     parser.add_argument('--segmentations_dir', required=True)
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
-    parser.add_argument('--transformer_layers', type=int, default=2)
-    parser.add_argument('--dim_feedforward', type=int, default=256)
-    parser.add_argument('--dual_softmax', action='store_true')
+    parser.add_argument('--transformer_layers', type=int, default=3)
+    parser.add_argument('--dim_feedforward', type=int, default=1024)
+    parser.add_argument('--dual_softmax', action='store_false')
     parser.add_argument('--sinkhorn_iterations', type=int, default=15)
-    parser.add_argument('--unmatch_scale', type=float, default=1.0)
+    parser.add_argument('--unmatch_scale', type=float, default=0.5)
 
     parser.add_argument('--shuffle', action='store_false')
     parser.add_argument('--trans_lr', type=float, default=3.5e-6)
     parser.add_argument('--conv_lr', type=float, default=1e-3)
     parser.add_argument('--bin_lr', type=float, default=1e-3)
 
-    parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_steps', type=int, default=30000)
+    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--log_steps', type=int, default=100)
     parser.add_argument('--log_checkpoints', type=int, default=100)
 
