@@ -164,7 +164,7 @@ def parse_args():
     parser.add_argument('--dual_softmax', action='store_true')
     parser.add_argument('--sinkhorn_iterations', type=int, default=10)
 
-    parser.add_argument('--match_threshold', type=float, default=0.1)
+    parser.add_argument('--match_threshold', type=float, default=0.01)
     parser.add_argument('--top_n', type=int, default=20)
     parser.add_argument('--use_dustbin', action='store_false')
     parser.add_argument('--use_homography', action='store_true')

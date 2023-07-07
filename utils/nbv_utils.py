@@ -310,17 +310,15 @@ def vis_segs(torch_im_0, torch_im_1, torch_points_0, torch_points_1, output_path
     comb_im[:, 0:width] = cv_im_0
     comb_im[:, width+padding:] = cv_im_1
 
-    num_colors = 20
-    colors = distinctipy.get_colors(num_colors)
     for i in range(points_0.shape[0]):
-        color = colors[i % num_colors]
-        color = ([int(255*color[0]), int(255*color[1]), int(255*color[2])])
+        x, y = points_0[i]
 
-        x0, y0 = points_0[i]
-        x1, y1 = points_1[i]
-        x1 += width + padding
+        cv2.circle(comb_im, (x, y), 1, (255, 0, 0), thickness=-1)
 
-        cv2.circle(comb_im, (x0, y0), 1, (255, 0, 0), thickness=-1)
-        cv2.circle(comb_im, (x1, y1), 1, (255, 0, 0), thickness=-1)
+    for i in range(points_1.shape[0]):
+        x, y = points_1[i]
+        x += width + padding
+
+        cv2.circle(comb_im, (x, y), 1, (255, 0, 0), thickness=-1)
 
     cv2.imwrite(output_path, comb_im)

@@ -16,23 +16,28 @@ def throwRuntimeError(msg):
 #TODO add bad points back in?
 #TODO add centroid back in?
 class FeatureDataset(Dataset):
-    def __init__(self, images_dir, segmentations_dir, min_dim,
+    def __init__(self, images_dir, segmentations_dir, window_length,
+                 num_points, #max number of transformer points (if smaller will be masked)
                  shuffle_inds=True, #whether to shuffle order of points
                  rand_flip=True, #whether to flip image
+                 drop_point_thresh=0.1, #percentage to drop random point from both masks 
                  should_gauss_blur = True,
                  affine_thresh=0.3, #percentage of using affine thresh
                  aug_orig_thresh=-1, #percentage of augmenting original image
                  aug_bright_orig_thresh=-1, #if not augment original image, whether or not to randomly brighten
-                 other_match_thresh=0.3, #percentage of matching against two different fruitlets
+                 other_match_thresh=0.5, #percentage of matching against two different fruitlets
                  other_attempts=5, #number of attempts to try this if there is a bug
                  cluster_match_thresh=0.8, #if above, percentage of matching with fruitlet from same cluster
                  swap_thresh=0.5, #whether to swap two images
                  ):
         
-        self.paths = self.get_paths(images_dir, segmentations_dir, min_dim)
+        self.paths = self.get_paths(images_dir, segmentations_dir)
+        self.window_length = window_length
+        self.num_points = num_points
         self.shuffle_inds = shuffle_inds
 
         self.rand_flip = rand_flip
+        self.drop_point_thresh = drop_point_thresh
         self.should_gauss_blur = should_gauss_blur
         self.affine_thresh = affine_thresh
         self.aug_orig_thresh = aug_orig_thresh
@@ -42,16 +47,12 @@ class FeatureDataset(Dataset):
         self.cluster_match_thresh = cluster_match_thresh
         self.swap_thresh = swap_thresh
         
-        self.random_affine = T.RandomAffine(degrees=(-30, 30), translate=(0.1, 0.1), scale=(0.75, 0.9))
+        self.random_affine = T.RandomAffine(degrees=(-30, 30), translate=(0.1, 0.1), scale=(0.75, 1.1))
         self.random_brightness = T.ColorJitter(brightness=0.2,contrast=0.4,saturation=0.2,hue=0.1)
         self.perspective_distortion_scale = 0.4
         self.gauss_blur = T.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 0.5))
 
-        self.width = 1440
-        self.height = 1080
-
-    def get_paths(self, images_dir, segmentations_dir, min_dim):
-        max_num_points = -1
+    def get_paths(self, images_dir, segmentations_dir):
         paths = []
 
         for fileneame in os.listdir(segmentations_dir):
@@ -75,19 +76,14 @@ class FeatureDataset(Dataset):
                 height = max_y + 1 - min_y
                 width = max_x + 1 - min_x
 
-                if height < min_dim:
+                if height < 24:
                     continue
 
-                if width < min_dim:
+                if width < 24:
                     continue
-
-                num_points = seg_points.shape[0]
-                if num_points > max_num_points:
-                    max_num_points = num_points
 
                 paths.append((im_path, seg_path, seg_ind))
 
-        self.max_num_points = max_num_points
         return paths
     
     def __len__(self):
@@ -154,28 +150,6 @@ class FeatureDataset(Dataset):
 
         return aug_torch_im, aug_seg_inds
     
-    def validate_return(self, res):
-        _, _, seg_inds_pad_0, seg_inds_pad_1, _, _, _, _, _ = res
-
-        valid = True
-        for seg_inds in [seg_inds_pad_0, seg_inds_pad_1]:
-            if seg_inds[:, 0].max() < 0:
-                valid = False
-        
-            if seg_inds[:, 1].max() < 0:
-                valid = False
-
-            if seg_inds[:, 0].min() >= self.width:
-                valid = False
-
-            if seg_inds[:, 1].min() >= self.height:
-                valid = False
-
-        if not valid:
-            throwRuntimeError('Invalid res')
-        
-        return res
-
     def __getitem__(self, idx):
         use_other_match = np.random.random() < self.other_match_thresh
         if use_other_match:
@@ -187,10 +161,10 @@ class FeatureDataset(Dataset):
         while True:
             try:
                 if num_attempts < self.other_attempts:
-                    return self.validate_return(func(idx))
+                    return func(idx)
                 else:
                     #revert to what we know
-                    return self.validate_return(self.get_aug_item(idx))
+                    return self.get_aug_item(idx)
             except Exception as e:
                 print('Error in data loader: ', use_other_match)
                 if hasattr(e, 'message'):
@@ -275,40 +249,55 @@ class FeatureDataset(Dataset):
             torch_im_0, torch_im_1 = torch_im_1, torch_im_0
             seg_inds_0, seg_inds_1 = seg_inds_1, seg_inds_0
 
+        #get bgr features and which seg_inds to use
+        bgrs_0, used_seg_inds_0 = load_feature_inputs(torch_im_0, seg_inds_0, self.window_length) 
+        bgrs_1, used_seg_inds_1 = load_feature_inputs(torch_im_1, seg_inds_1, self.window_length) 
+
+        #randomly drop points independantly
+        drop_points(used_seg_inds_0, self.drop_point_thresh)
+        drop_points(used_seg_inds_1, self.drop_point_thresh)
+
+        #if more than num_points need to drop
+        #output of this does not mean array is length num_points,
+        #only the sum is less than
+        used_seg_inds_0 = select_valid_points(used_seg_inds_0, self.num_points)
+        used_seg_inds_1 = select_valid_points(used_seg_inds_1, self.num_points)
+
         #we can now shuffle both points
         #because there is no 1:1 matching,
         #this is done differently than in get_aug_item
         if self.shuffle_inds:
             perm_0 = np.random.permutation(seg_inds_0.shape[0])
             seg_inds_0 = seg_inds_0[perm_0]
+            bgrs_0 = bgrs_0[perm_0]
+            used_seg_inds_0 = used_seg_inds_0[perm_0]
 
             perm_1 = np.random.permutation(seg_inds_1.shape[0])
             seg_inds_1 = seg_inds_1[perm_1]
+            bgrs_1 = bgrs_1[perm_1]
+            used_seg_inds_1 = used_seg_inds_1[perm_1]
+
+        #select our segmentation indices and our matches
+        #used_seg_inds_0 and used_seg_inds_1 are done after this
+        seg_inds_0, bgrs_0 = select_points(used_seg_inds_0, seg_inds_0, bgrs_0)
+        seg_inds_1, bgrs_1 = select_points(used_seg_inds_1, seg_inds_1, bgrs_1)
 
         #set matches to -1
         matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1
         matches_1 = np.zeros((seg_inds_1.shape[0]), dtype=int) - 1
+
+        if seg_inds_0.shape[0] > self.num_points:
+            throwRuntimeError('seg_inds_0 too large, something is wrong')
+
+        if seg_inds_1.shape[0] > self.num_points:
+            throwRuntimeError('seg_inds_1 too large, something is wrong')
         
-        ###pad
-        num_points_0 = seg_inds_0.shape[0]
-        num_points_1 = seg_inds_1.shape[0]
-
-        seg_inds_pad_0 = np.zeros((self.max_num_points, 2), dtype=seg_inds_0.dtype)
-        seg_inds_pad_1 = np.zeros((self.max_num_points, 2), dtype=seg_inds_1.dtype)
-
-        seg_inds_pad_0[0:num_points_0] = seg_inds_0
-        seg_inds_pad_1[0:num_points_1] = seg_inds_1
-        
-        matches_pad_0 = np.zeros((self.max_num_points,), dtype=matches_0.dtype) - 1
-        matches_pad_1 = np.zeros((self.max_num_points,), dtype=matches_1.dtype) - 1
-
-        matches_pad_0[0:num_points_0] = matches_0
-        matches_pad_1[0:num_points_1] = matches_1
-        ###
+        #now we can add masked points
+        seg_inds_0, bgrs_0, matches_0, is_mask_0, num_mask_0 = create_mask(seg_inds_0, bgrs_0, matches_0, self.num_points)
+        seg_inds_1, bgrs_1, matches_1, is_mask_1, num_mask_1 = create_mask(seg_inds_1, bgrs_1, matches_1, self.num_points)
 
         #return
-        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), seg_inds_pad_0, seg_inds_pad_1, num_points_0, num_points_1, matches_pad_0, matches_pad_1, True
-   
+        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1, False
 
     def get_aug_item(self, idx):
         img_path_locs, seg_path_locs, seg_ind_locs = self.paths[idx]
@@ -345,19 +334,48 @@ class FeatureDataset(Dataset):
             torch_im_0, torch_im_1 = torch_im_1, torch_im_0
             seg_inds_0, seg_inds_1 = seg_inds_1, seg_inds_0
 
+        #get bgr features and which seg_inds to use
+        bgrs_0, used_seg_inds_0 = load_feature_inputs(torch_im_0, seg_inds_0, self.window_length) 
+        bgrs_1, used_seg_inds_1 = load_feature_inputs(torch_im_1, seg_inds_1, self.window_length) 
+        
+        #randomly drop points independantly
+        drop_points(used_seg_inds_0, self.drop_point_thresh)
+        drop_points(used_seg_inds_1, self.drop_point_thresh)
+
+        #if more than num_points need to drop
+        #output of this does not mean array is length num_points,
+        #only the sum is less than
+        used_seg_inds_0 = select_valid_points(used_seg_inds_0, self.num_points)
+        used_seg_inds_1 = select_valid_points(used_seg_inds_1, self.num_points)
+
+        #shuffle both
+        if self.shuffle_inds:
+            perm = np.random.permutation(seg_inds_0.shape[0])
+            
+            seg_inds_0 = seg_inds_0[perm]
+            bgrs_0 = bgrs_0[perm]
+            used_seg_inds_0 = used_seg_inds_0[perm]
+
+            seg_inds_1 = seg_inds_1[perm]
+            bgrs_1 = bgrs_1[perm]
+            used_seg_inds_1 = used_seg_inds_1[perm]
+
+        #select our segmentation indices and our matches
+        #used_seg_inds_0 and used_seg_inds_1 are done after this
+        seg_inds_0, bgrs_0 = select_points(used_seg_inds_0, seg_inds_0, bgrs_0)
+        seg_inds_1, bgrs_1 = select_points(used_seg_inds_1, seg_inds_1, bgrs_1)
+
         #use these for matching
-        inds_0 = np.arange(seg_inds_0.shape[0])
-        inds_1 = np.arange(seg_inds_0.shape[0])
+        inds_0 = np.arange(used_seg_inds_0.shape[0])[used_seg_inds_0]
+        inds_1 = np.arange(used_seg_inds_1.shape[0])[used_seg_inds_1]
 
         #shuffle one now
+        #don't have to do other because we shuffled both before
         if self.shuffle_inds:
-            perm_0 = np.random.permutation(seg_inds_0.shape[0])
-            seg_inds_0 = seg_inds_0[perm_0]
-            inds_0 = inds_0[perm_0]
-
-            perm_1 = np.random.permutation(seg_inds_1.shape[0])
-            seg_inds_1 = seg_inds_1[perm_1]
-            inds_1 = inds_1[perm_1]
+            perm = np.random.permutation(seg_inds_0.shape[0])
+            seg_inds_0 = seg_inds_0[perm]
+            bgrs_0 = bgrs_0[perm]
+            inds_0 = inds_0[perm]
 
         #and do our matches
         matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1
@@ -368,31 +386,49 @@ class FeatureDataset(Dataset):
         matches_0[dual_matches[1]] = dual_matches[0]
         matches_1[dual_matches[0]] = dual_matches[1]
 
-        ###pad
-        num_points_0 = seg_inds_0.shape[0]
-        num_points_1 = seg_inds_1.shape[0]
+        if seg_inds_0.shape[0] > self.num_points:
+            throwRuntimeError('seg_inds_0 too large, something is wrong')
 
-        seg_inds_pad_0 = np.zeros((self.max_num_points, 2), dtype=seg_inds_0.dtype)
-        seg_inds_pad_1 = np.zeros((self.max_num_points, 2), dtype=seg_inds_1.dtype)
-
-        seg_inds_pad_0[0:num_points_0] = seg_inds_0
-        seg_inds_pad_1[0:num_points_1] = seg_inds_1
+        if seg_inds_1.shape[0] > self.num_points:
+            throwRuntimeError('seg_inds_1 too large, something is wrong')
         
-        matches_pad_0 = np.zeros((self.max_num_points,), dtype=matches_0.dtype) - 1
-        matches_pad_1 = np.zeros((self.max_num_points,), dtype=matches_1.dtype) - 1
-
-        matches_pad_0[0:num_points_0] = matches_0
-        matches_pad_1[0:num_points_1] = matches_1
-        ###
+        #now we can add masked points
+        seg_inds_0, bgrs_0, matches_0, is_mask_0, num_mask_0 = create_mask(seg_inds_0, bgrs_0, matches_0, self.num_points)
+        seg_inds_1, bgrs_1, matches_1, is_mask_1, num_mask_1 = create_mask(seg_inds_1, bgrs_1, matches_1, self.num_points)
 
         #return
-        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), seg_inds_pad_0, seg_inds_pad_1, num_points_0, num_points_1, matches_pad_0, matches_pad_1, True
+        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), bgrs_0, bgrs_1, seg_inds_0, seg_inds_1, is_mask_0, is_mask_1, num_mask_0, num_mask_1, matches_0, matches_1, True
    
-def get_data_loader(images_dir, segmentations_dir,
-                    min_dim,
-                    batch_size, shuffle):
-    dataset = FeatureDataset(images_dir, segmentations_dir, min_dim)
+def get_data_loader(images_dir, segmentations_dir, window_length,
+                    num_points, batch_size, shuffle):
+    dataset = FeatureDataset(images_dir, segmentations_dir, window_length, num_points)
     dloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
 
     return dloader
 
+# images_dir = '/home/frc-ag-3/harry_ws/fruitlet_2023/nbv/debug_bag/raw_images/left'
+# seg_dir = '/home/frc-ag-3/harry_ws/fruitlet_2023/nbv/debug_bag/segmentations'
+# dataloader = get_data_loader(images_dir, seg_dir, 5000, 1, True)
+
+# data_size = len(dataloader)
+# output_dir = '/home/frc-ag-3/harry_ws/fruitlet_2023/nbv/debug_homography'
+# import cv2
+# for i, data in enumerate(dataloader):
+#     im_0, im_1, seg_inds_0, seg_inds_1, is_val = data
+    
+#     cv_im_0 = im_0[0].permute(1, 2, 0).numpy().copy()
+#     cv_im_1 = im_1[0].permute(1, 2, 0).numpy().copy()
+
+#     valid_inds = is_val[0].numpy().copy()
+
+#     sg_0 = seg_inds_0[0, valid_inds > 0]
+#     sg_1 = seg_inds_1[0, valid_inds > 0]
+
+#     cv_im_0[sg_0[:, 1], sg_0[:, 0]] = [255, 0, 0]
+#     cv_im_1[sg_1[:, 1], sg_1[:, 0]] = [255, 0, 0]
+
+#     cv2.imwrite(os.path.join(output_dir, str(i) + '_0.png'), cv_im_0)
+#     cv2.imwrite(os.path.join(output_dir, str(i) + '_1.png'), cv_im_1)
+
+#     if (i >= 3):
+#         break
