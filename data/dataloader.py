@@ -19,11 +19,13 @@ class FeatureDataset(Dataset):
     def __init__(self, images_dir, segmentations_dir, min_dim,
                  shuffle_inds=True, #whether to shuffle order of points
                  rand_flip=True, #whether to flip image
-                 should_gauss_blur = True,
+                 should_gauss_blur=False,
+                 should_rand_bright=False,
+                 erase_thresh=0.4,
                  affine_thresh=0.3, #percentage of using affine thresh
                  aug_orig_thresh=-1, #percentage of augmenting original image
                  aug_bright_orig_thresh=-1, #if not augment original image, whether or not to randomly brighten
-                 other_match_thresh=0.3, #percentage of matching against two different fruitlets
+                 other_match_thresh=0.2, #percentage of matching against two different fruitlets
                  other_attempts=5, #number of attempts to try this if there is a bug
                  cluster_match_thresh=0.8, #if above, percentage of matching with fruitlet from same cluster
                  swap_thresh=0.5, #whether to swap two images
@@ -34,6 +36,8 @@ class FeatureDataset(Dataset):
 
         self.rand_flip = rand_flip
         self.should_gauss_blur = should_gauss_blur
+        self.should_rand_bright = should_rand_bright
+        self.erase_thresh = erase_thresh
         self.affine_thresh = affine_thresh
         self.aug_orig_thresh = aug_orig_thresh
         self.aug_bright_orig_thresh = aug_bright_orig_thresh
@@ -43,7 +47,8 @@ class FeatureDataset(Dataset):
         self.swap_thresh = swap_thresh
         
         self.random_affine = T.RandomAffine(degrees=(-30, 30), translate=(0.1, 0.1), scale=(0.75, 0.9))
-        self.random_brightness = T.ColorJitter(brightness=0.2,contrast=0.4,saturation=0.2,hue=0.1)
+        # self.random_brightness = T.ColorJitter(brightness=0.2,contrast=0.4,saturation=0.2,hue=0.1)
+        self.random_brightness = T.ColorJitter(brightness=0.1,contrast=0.1,saturation=0.1,hue=0.05)
         self.perspective_distortion_scale = 0.4
         self.gauss_blur = T.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 0.5))
 
@@ -52,6 +57,7 @@ class FeatureDataset(Dataset):
 
     def get_paths(self, images_dir, segmentations_dir, min_dim):
         max_num_points = -1
+        max_dim = -1
         paths = []
 
         for fileneame in os.listdir(segmentations_dir):
@@ -81,17 +87,95 @@ class FeatureDataset(Dataset):
                 if width < min_dim:
                     continue
 
+                if height > max_dim:
+                    max_dim = height
+
+                if width > max_dim:
+                    max_dim = width
+
                 num_points = seg_points.shape[0]
                 if num_points > max_num_points:
                     max_num_points = num_points
 
                 paths.append((im_path, seg_path, seg_ind))
 
+        self.min_dim = min_dim
+        self.max_dim = max_dim
         self.max_num_points = max_num_points
         return paths
     
     def __len__(self):
         return len(self.paths)
+
+    def erase(self, seg_inds, inds):
+        min_x, min_y = seg_inds.min(axis=0)
+        max_x, max_y = seg_inds.max(axis=0)
+
+        height = max_y + 1 - min_y
+        width = max_x + 1 - min_x
+
+        #these are areas to erase
+        x0 = 0
+        x1 = width
+        y0 = 0
+        y1 = height
+
+        erase_type = np.random.randint(0, 8)
+
+        #erase left half
+        if erase_type == 0:
+            x1 = width // 2
+        #erase right half
+        elif erase_type == 1:
+            x0 = width // 2
+        #erase top half
+        elif erase_type == 2:
+            y1 = height // 2
+        #erase bottom half
+        elif erase_type == 3:
+            y0 = height // 2
+        #erase top left
+        elif erase_type == 4:
+            x1 = width // 2
+            y1 = height // 2
+        #erase top right
+        elif erase_type == 5:
+            x0 = width // 2
+            y1 = height // 2
+        #bottom left
+        elif erase_type == 6:
+            x1 = width // 2
+            y0 = height // 2
+        #bottom right
+        elif erase_type == 7:
+            x0 = width // 2
+            y0 = height // 2
+        else:
+            raise RuntimeError('Illegal value')
+        
+        x0 = x0 + min_x
+        x1 = x1 + min_x
+
+        y0 = y0 + min_y
+        y1 = y1 + min_y
+        
+        erase_inds = ((seg_inds[:, 0] >= x0) & 
+                             (seg_inds[:, 0] <= x1) & 
+                             (seg_inds[:, 1] >= y0) & 
+                             (seg_inds[:, 1] <= y1))
+        
+        return seg_inds[~erase_inds], inds[~erase_inds]
+    
+    def filter_inds(self, seg_inds, inds=None):
+        good_inds = ((seg_inds[:, 0] >= 0) & 
+                             (seg_inds[:, 0] < self.width) & 
+                             (seg_inds[:, 1] >= 0) & 
+                             (seg_inds[:, 1] < self.height))
+        
+        if inds is not None:
+            return seg_inds[good_inds], inds[good_inds]
+        else:
+            return seg_inds[good_inds]
 
     def augment_affine(self, torch_im, seg_inds):
         angle, translations, scale, shear = T.RandomAffine.get_params(self.random_affine.degrees, 
@@ -147,7 +231,8 @@ class FeatureDataset(Dataset):
         else:
             aug_torch_im, aug_seg_inds = self.augment_perspective(torch_im, seg_inds)
 
-        aug_torch_im = self.random_brightness(aug_torch_im)
+        if self.should_rand_bright:
+            aug_torch_im = self.random_brightness(aug_torch_im)
 
         if self.should_gauss_blur:
             aug_torch_im = self.gauss_blur(aug_torch_im)
@@ -260,13 +345,13 @@ class FeatureDataset(Dataset):
             torch_im_0, seg_inds_0 = self.augment(torch_im_0, seg_inds_0)
         else:
             should_rand_bright_0 = np.random.random() < self.aug_bright_orig_thresh
-            if should_rand_bright_0:
+            if should_rand_bright_0 and self.should_rand_bright:
                 torch_im_0 = self.random_brightness(torch_im_0)
         if should_augment_im_1:
             torch_im_1, seg_inds_1 = self.augment(torch_im_1, seg_inds_1)
         else:
             should_rand_bright_1 = np.random.random() < self.aug_bright_orig_thresh
-            if should_rand_bright_1:
+            if should_rand_bright_1 and self.should_rand_bright:
                 torch_im_1 = self.random_brightness(torch_im_1)
 
         #determine to swap inputs
@@ -284,6 +369,16 @@ class FeatureDataset(Dataset):
 
             perm_1 = np.random.permutation(seg_inds_1.shape[0])
             seg_inds_1 = seg_inds_1[perm_1]
+
+        #filter bad inds
+        seg_inds_0 = self.filter_inds(seg_inds_0)
+        seg_inds_1 = self.filter_inds(seg_inds_1)
+
+        if seg_inds_0.shape[0] == 0:
+            throwRuntimeError('no seg inds 0')
+
+        if seg_inds_1.shape[0] == 0:
+            throwRuntimeError('no seg inds 1')
 
         #set matches to -1
         matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1
@@ -307,7 +402,7 @@ class FeatureDataset(Dataset):
         ###
 
         #return
-        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), seg_inds_pad_0, seg_inds_pad_1, num_points_0, num_points_1, matches_pad_0, matches_pad_1, True
+        return torch_im_0.squeeze(0), torch_im_1.squeeze(0), seg_inds_pad_0, seg_inds_pad_1, num_points_0, num_points_1, matches_pad_0, matches_pad_1, False
    
 
     def get_aug_item(self, idx):
@@ -333,7 +428,7 @@ class FeatureDataset(Dataset):
             torch_im_0, seg_inds_0 = self.augment(torch_im, seg_inds)
         else:
             should_rand_bright = np.random.random() < self.aug_bright_orig_thresh
-            if should_rand_bright:
+            if should_rand_bright and self.should_rand_bright:
                 torch_im_0 = self.random_brightness(torch_im)
             else:
                 torch_im_0 = torch_im
@@ -358,6 +453,24 @@ class FeatureDataset(Dataset):
             perm_1 = np.random.permutation(seg_inds_1.shape[0])
             seg_inds_1 = seg_inds_1[perm_1]
             inds_1 = inds_1[perm_1]
+
+        #filter bad inds
+        seg_inds_0, inds_0 = self.filter_inds(seg_inds_0, inds_0)
+        seg_inds_1, inds_1 = self.filter_inds(seg_inds_1, inds_1)
+
+        #erase
+        should_erase_0 = np.random.random() < self.erase_thresh
+        should_erase_1 = np.random.random() < self.erase_thresh
+        if should_erase_0:
+            seg_inds_0, inds_0 = self.erase(seg_inds_0, inds_0)
+        if should_erase_1:
+            seg_inds_1, inds_1 = self.erase(seg_inds_1, inds_1)
+
+        if seg_inds_0.shape[0] == 0:
+            throwRuntimeError('no seg inds 0')
+
+        if seg_inds_1.shape[0] == 0:
+            throwRuntimeError('no seg inds 1')
 
         #and do our matches
         matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1

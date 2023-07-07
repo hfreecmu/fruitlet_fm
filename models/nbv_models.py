@@ -40,15 +40,22 @@ def log_optimal_transport(scores: torch.Tensor, alpha: torch.Tensor, iters: int)
 ##### Encoder
 #TODO bias true or false?
 #TODO relu or leaky relu?
-def conv(dims, strides, kernel_size, padding):
+def conv(dims, strides, pools, kernel_size, padding, orig_dim):
     layers = []
     
-    prev_dim = 3
+    prev_dim = orig_dim
     for i in range(len(dims) - 1):
         conv = nn.Conv2d(prev_dim, dims[i], kernel_size=kernel_size, stride=strides[i], padding=padding)
-        relu = nn.ReLU()
+        #relu = nn.ReLU()
+        relu = nn.LeakyReLU(0.01)
         layers.append(conv)
+
+        if pools[i]:
+            max_pool = nn.MaxPool2d(2, stride=2)
+            layers.append(max_pool)
+
         layers.append(relu)
+
 
         prev_dim = dims[i]
 
@@ -58,10 +65,10 @@ def conv(dims, strides, kernel_size, padding):
     return nn.Sequential(*layers)
 
 class Encoder(nn.Module):
-    def __init__(self, dims, strides, kernel_size=3, padding=1):
+    def __init__(self, dims, strides, pools, orig_dim, kernel_size=7, padding=3):
         super(Encoder, self).__init__()
     
-        self.network = conv(dims, strides, kernel_size, padding)
+        self.network = conv(dims, strides, pools, kernel_size, padding, orig_dim)
     
     def forward(self, x):
         x = self.network(x)
@@ -74,7 +81,8 @@ def fc(in_dim, out_dims):
     prev_dim = in_dim
     for i in range(len(out_dims) - 1):
         fc = nn.Linear(prev_dim, out_dims[i])
-        relu = nn.ReLU()
+        #relu = nn.ReLU()
+        relu = nn.LeakyReLU(0.01)
 
         layers.append(fc)
         layers.append(relu)
@@ -142,13 +150,18 @@ class Transformer(nn.Module):
 class TransformerAssociator(nn.Module):
     def __init__(self, dims, strides, 
                  n_layers, d_model, dim_feedforward,
-                 mlp_layers,
+                 mlp_layers, pools, 
                  dual_softmax,
                  sinkhorn_iterations,
                  device):
         super(TransformerAssociator, self).__init__()
 
-        self.encoder = Encoder(dims, strides)
+        dims, kpts_dims = dims
+        strides, kpts_strides = strides
+        pools, kpts_pools = pools
+
+        self.kpts_encoder = Encoder(kpts_dims, kpts_strides, kpts_pools, 42)
+        self.encoder = Encoder(dims, strides, pools, 3)
         self.transformer = Transformer(n_layers, d_model, dim_feedforward, mlp_layers)
         self.dual_softmax = dual_softmax
         self.sinkhorn_iterations = sinkhorn_iterations
@@ -167,7 +180,6 @@ class TransformerAssociator(nn.Module):
         bgrs_1, positional_encodings_1 = x_1
 
         num_images = len(bgrs_0)
-        dim = positional_encodings_0[0].shape[0]
 
         scores = []
         is_features_0 = []
@@ -181,26 +193,35 @@ class TransformerAssociator(nn.Module):
             h_0, w_0 = features_0.shape[-2:]
             h_1, w_1 = features_1.shape[-2:]
 
-            pe_0 = positional_encodings_0[image_ind]
-            pe_1 = positional_encodings_1[image_ind]
-
-            pe_0 = F.interpolate(pe_0.unsqueeze(0), size=(h_0, w_0), mode='bilinear').squeeze()
-            pe_1 = F.interpolate(pe_1.unsqueeze(0), size=(h_1, w_1), mode='bilinear').squeeze()
+            pe_0 = self.kpts_encoder(positional_encodings_0[image_ind])
+            pe_1 = self.kpts_encoder(positional_encodings_1[image_ind])
 
             src_0 = features_0 + pe_0
             src_1 = features_1 + pe_1
 
-            src_0 = torch.permute(src_0, (1, 2, 0)).reshape((-1, dim)).unsqueeze(0)
-            src_1 = torch.permute(src_1, (1, 2, 0)).reshape((-1, dim)).unsqueeze(0)
+            src_0 = torch.permute(src_0, (0, 2, 3, 1)).reshape((1, -1, src_0.shape[1]))
+            src_1 = torch.permute(src_1, (0, 2, 3, 1)).reshape((1, -1, src_1.shape[1]))
 
             desc_0, desc_1, is_feature_0, is_feature_1 = self.transformer(src_0, src_1)
 
             is_feature_0 = is_feature_0.reshape((h_0, w_0))
             is_feature_1 = is_feature_1.reshape((h_1, w_1))
 
+            size_0_orig = (bgrs_0[image_ind].shape[-2], bgrs_0[image_ind].shape[-1])
+            size_1_orig = (bgrs_1[image_ind].shape[-2], bgrs_1[image_ind].shape[-1])
+
+            desc_0 = desc_0.reshape((1, h_0, w_0, -1))
+            desc_1 = desc_1.reshape((1, h_1, w_1, -1))
+
+            desc_0 = torch.permute(F.interpolate(torch.permute(desc_0, (0, 3, 1, 2)), size=(size_0_orig), mode='bilinear'), (0, 2, 3, 1))
+            desc_1 = torch.permute(F.interpolate(torch.permute(desc_1, (0, 3, 1, 2)), size=(size_1_orig), mode='bilinear'), (0, 2, 3, 1))
+
+            desc_0 = desc_0.reshape((1, -1, desc_0.shape[-1]))
+            desc_1 = desc_1.reshape((1, -1, desc_1.shape[-1]))
+
             #used to be torch einsum thing
             ot_score = torch.matmul(desc_0[0], desc_1[0].T).unsqueeze(0)
-            ot_score = ot_score / dim**.5
+            ot_score = ot_score / desc_0.shape[-1]**.5
             ot_score = log_optimal_transport(ot_score, self.bin_score, iters=self.sinkhorn_iterations)
 
             scores.append(ot_score.squeeze(0))
@@ -225,7 +246,7 @@ class TransformerAssociator(nn.Module):
 #R^2 to R^(2 + 4*L)
 #actuatlly,to R^(4*L) as  I will remove x and y
 #paper read (nerf) uses L = 10
-def positional_encoder(p, L, include_orig=False):
+def positional_encoder(p, L=10, include_orig=False):
     x = p[0]
     y = p[1]
 
@@ -256,34 +277,47 @@ def positional_encoder(p, L, include_orig=False):
     return enc_out  
 
 #assumes SQUEEZED
-def prep_feature_data(torch_im, seg_inds, matches, dim, width, height, device):
+def prep_feature_data(torch_im, seg_inds, matches, norm_dim, device):
     x0 = torch.min(seg_inds[:, 0])
     x1 = torch.max(seg_inds[:, 0])
     y0 = torch.min(seg_inds[:, 1])
     y1 = torch.max(seg_inds[:, 1])
-    
-    bgrs = torch_im[:, y0:y1+1, x0:x1+1].float() / 255
+
+    width = x1 + 1 - x0
+    height = y1 + 1 - y0
+
+    bgrs = 2*(torch_im[:, y0:y1+1, x0:x1+1].float() / 255) - 1
     bgrs = bgrs.to(device)
 
-    x_pts = torch.arange(bgrs.shape[-1]).repeat(bgrs.shape[-2], 1) + x0
-    x_pts = (x_pts - width) / width
+    x_pts = torch.arange(bgrs.shape[-1]).repeat(bgrs.shape[-2], 1) - width//2 #+ x0
+    #x_pts = (x_pts - width) / width
+    x_pts = 2*x_pts / norm_dim
 
-    y_pts = torch.arange(bgrs.shape[-2]).repeat(bgrs.shape[-1], 1).T + y0
-    y_pts = (y_pts - height)
+    y_pts = torch.arange(bgrs.shape[-2]).repeat(bgrs.shape[-1], 1).T - height//2 #+ y0
+    #y_pts = (y_pts - height)
+    y_pts = 2*y_pts / norm_dim
     
     kpts = torch.stack((x_pts, y_pts), dim=0)
 
-    positional_encodings = positional_encoder(kpts, dim//4)
+    positional_encodings = positional_encoder(kpts, include_orig=True)
     positional_encodings = positional_encodings.to(device)
 
     #feature keypoint, not same as kpts above
     has_match = (matches != -1)
     matched_seg_inds = seg_inds[has_match]
-    is_keypoint = torch.zeros((bgrs.shape[-2], bgrs.shape[-1])).float()
-    is_keypoint[matched_seg_inds[:, 1] - y0, matched_seg_inds[:, 0] - x0] = 1.0
-    is_keypoint = is_keypoint.to(device)
+    try:
+        is_keypoint = torch.zeros((bgrs.shape[-2], bgrs.shape[-1])).float()
+        if (matched_seg_inds.shape[0] > 0):  
+            is_keypoint[matched_seg_inds[:, 1] - y0, matched_seg_inds[:, 0] - x0] = 1.0
+        is_keypoint = is_keypoint.to(device)
+    except Exception as e:
+        breakpoint()
 
-    return bgrs, positional_encodings, is_keypoint
+    new_seg_inds = torch.clone(seg_inds)
+    new_seg_inds[:, 0] -= x0
+    new_seg_inds[:, 1] -= y0
+
+    return bgrs, positional_encodings, is_keypoint, x0, y0, new_seg_inds
 
 def arange_like(x, dim: int):
     return x.new_ones(x.shape[dim]).cumsum(0) - 1  # traceable in 1.1
