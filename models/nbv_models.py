@@ -65,7 +65,7 @@ def conv(dims, strides, pools, kernel_size, padding, orig_dim):
     return nn.Sequential(*layers)
 
 class Encoder(nn.Module):
-    def __init__(self, dims, strides, pools, orig_dim, kernel_size=7, padding=3):
+    def __init__(self, dims, strides, pools, orig_dim, kernel_size=5, padding=2):
         super(Encoder, self).__init__()
     
         self.network = conv(dims, strides, pools, kernel_size, padding, orig_dim)
@@ -228,6 +228,8 @@ class TransformerAssociator(nn.Module):
                 desc_0 = torch.cat((desc_0, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
                 desc_1 = torch.cat((desc_1, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
                 ot_score = torch.matmul(desc_0[0], desc_1[0].T)
+                #
+                #ot_score = ot_score / 0.1
                 ot_score = ot_score / desc_0.shape[-1]**.5
                 ot_score = F.log_softmax(ot_score, dim=0) + F.log_softmax(ot_score, dim=1)
                 ot_score = ot_score.unsqueeze(0)
@@ -311,15 +313,18 @@ def prep_feature_data(torch_im, seg_inds, matches, norm_dim, device):
     positional_encodings = positional_encodings.to(device)
 
     #feature keypoint, not same as kpts above
-    has_match = (matches != -1)
-    matched_seg_inds = seg_inds[has_match]
-    try:
-        is_keypoint = torch.zeros((bgrs.shape[-2], bgrs.shape[-1])).float()
-        if (matched_seg_inds.shape[0] > 0):  
-            is_keypoint[matched_seg_inds[:, 1] - y0, matched_seg_inds[:, 0] - x0] = 1.0
-        is_keypoint = is_keypoint.to(device)
-    except Exception as e:
-        breakpoint()
+    if matches is not None:
+        has_match = (matches != -1)
+        matched_seg_inds = seg_inds[has_match]
+        try:
+            is_keypoint = torch.zeros((bgrs.shape[-2], bgrs.shape[-1])).float()
+            if (matched_seg_inds.shape[0] > 0):  
+                is_keypoint[matched_seg_inds[:, 1] - y0, matched_seg_inds[:, 0] - x0] = 1.0
+            is_keypoint = is_keypoint.to(device)
+        except Exception as e:
+            breakpoint()
+    else:
+        is_keypoint = None
 
     new_seg_inds = torch.clone(seg_inds)
     new_seg_inds[:, 0] -= x0

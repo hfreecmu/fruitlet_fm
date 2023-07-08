@@ -18,11 +18,11 @@ def train(opt):
     ###manually change things
     kpts_dims = [64, 64, 128, 128, 128]
     kpts_strides = [1, 1, 1, 1, 1]
-    kpts_pools = [False, True, False, True, False]
+    kpts_pools = [False, False, True, False, False]
 
     dims = [32, 32, 64, 64, 128]
     strides = [1, 1, 1, 1, 1]
-    pools = [False, True, False, True, False]
+    pools = [False, False, True, False, False]
     mlp_layers = [128, 64, 1]
     max_dim = 200
     #pos_weight = torch.ones((1)).to(opt.device)
@@ -36,14 +36,14 @@ def train(opt):
                                         opt.sinkhorn_iterations,
                                         opt.device).to(opt.device)
     
-    #load_checkpoint(1360, './checkpoints', transformer)
+    load_checkpoint(2300, './checkpoints', transformer)
 
     ###optimizers
     feature_optimizer = optim.Adam(list(transformer.encoder.parameters()) + list(transformer.kpts_encoder.parameters()), opt.conv_lr)
     bin_optimizer = optim.Adam([transformer.bin_score], opt.bin_lr)
     transformer_optimizer = optim.Adam(transformer.transformer.parameters(), opt.trans_lr)
 
-    milestones = [10000, 20000, 30000, 40000, 50000]
+    milestones = [20000, 30000, 40000, 50000, 60000]
     feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
     bin_scheduler = optim.lr_scheduler.MultiStepLR(bin_optimizer, milestones=milestones, gamma=0.5)
     transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
@@ -237,20 +237,21 @@ def parse_args():
     parser.add_argument('--segmentations_dir', required=True)
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
     parser.add_argument('--transformer_layers', type=int, default=3)
+    
     parser.add_argument('--dim_feedforward', type=int, default=1024)
     parser.add_argument('--dual_softmax', action='store_false')
     parser.add_argument('--sinkhorn_iterations', type=int, default=15)
     parser.add_argument('--unmatch_scale', type=float, default=0.5)
 
     parser.add_argument('--shuffle', action='store_false')
-    parser.add_argument('--trans_lr', type=float, default=3.5e-6)
-    parser.add_argument('--conv_lr', type=float, default=1e-3)
-    parser.add_argument('--bin_lr', type=float, default=1e-3)
+    parser.add_argument('--trans_lr', type=float, default=2e-6)
+    parser.add_argument('--conv_lr', type=float, default=5e-4)
+    parser.add_argument('--bin_lr', type=float, default=5e-4)
 
     parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--num_steps', type=int, default=100000)
-    parser.add_argument('--log_steps', type=int, default=100)
-    parser.add_argument('--log_checkpoints', type=int, default=100)
+    parser.add_argument('--num_steps', type=int, default=50000)
+    parser.add_argument('--log_steps', type=int, default=50)
+    parser.add_argument('--log_checkpoints', type=int, default=50)
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)

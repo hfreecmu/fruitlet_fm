@@ -25,7 +25,7 @@ class FeatureDataset(Dataset):
                  affine_thresh=0.3, #percentage of using affine thresh
                  aug_orig_thresh=-1, #percentage of augmenting original image
                  aug_bright_orig_thresh=-1, #if not augment original image, whether or not to randomly brighten
-                 other_match_thresh=0.2, #percentage of matching against two different fruitlets
+                 other_match_thresh=0.5, #percentage of matching against two different fruitlets
                  other_attempts=5, #number of attempts to try this if there is a bug
                  cluster_match_thresh=0.8, #if above, percentage of matching with fruitlet from same cluster
                  swap_thresh=0.5, #whether to swap two images
@@ -240,7 +240,13 @@ class FeatureDataset(Dataset):
         return aug_torch_im, aug_seg_inds
     
     def validate_return(self, res):
-        _, _, seg_inds_pad_0, seg_inds_pad_1, _, _, _, _, _ = res
+        _, _, seg_inds_pad_0, seg_inds_pad_1, np_0, np_1, _, _, _ = res
+
+        if seg_inds_pad_0[0:np_0].shape[0] == 0:
+            throwRuntimeError('no seg inds 0')
+
+        if seg_inds_pad_0[0:np_1].shape[0] == 0:
+            throwRuntimeError('no seg inds 1')
 
         valid = True
         for seg_inds in [seg_inds_pad_0, seg_inds_pad_1]:
@@ -256,8 +262,17 @@ class FeatureDataset(Dataset):
             if seg_inds[:, 1].min() >= self.height:
                 valid = False
 
+        width = seg_inds[:, 0].max() - seg_inds[:, 0].min() + 1
+        height = seg_inds[:, 1].max() - seg_inds[:, 1].min() + 1
+
         if not valid:
             throwRuntimeError('Invalid res')
+
+        if width < 20:
+            throwRuntimeError('Too small width')
+
+        if height < 20:
+            throwRuntimeError('Too small height')
         
         return res
 
@@ -374,12 +389,6 @@ class FeatureDataset(Dataset):
         seg_inds_0 = self.filter_inds(seg_inds_0)
         seg_inds_1 = self.filter_inds(seg_inds_1)
 
-        if seg_inds_0.shape[0] == 0:
-            throwRuntimeError('no seg inds 0')
-
-        if seg_inds_1.shape[0] == 0:
-            throwRuntimeError('no seg inds 1')
-
         #set matches to -1
         matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1
         matches_1 = np.zeros((seg_inds_1.shape[0]), dtype=int) - 1
@@ -465,12 +474,6 @@ class FeatureDataset(Dataset):
             seg_inds_0, inds_0 = self.erase(seg_inds_0, inds_0)
         if should_erase_1:
             seg_inds_1, inds_1 = self.erase(seg_inds_1, inds_1)
-
-        if seg_inds_0.shape[0] == 0:
-            throwRuntimeError('no seg inds 0')
-
-        if seg_inds_1.shape[0] == 0:
-            throwRuntimeError('no seg inds 1')
 
         #and do our matches
         matches_0 = np.zeros((seg_inds_0.shape[0]), dtype=int) - 1
