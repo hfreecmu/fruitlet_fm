@@ -191,7 +191,7 @@ def parse_args():
 
     parser.add_argument('--match_threshold', type=float, default=0.0001)
     parser.add_argument('--kpts_thresh', type=float, default=0.6)
-    parser.add_argument('--top_n', type=int, default=20)
+    parser.add_argument('--top_n', type=int, default=100)
     parser.add_argument('--use_dustbin', action='store_false')
     parser.add_argument('--use_homography', action='store_true')
     parser.add_argument('--use_rand_n', action='store_true')
@@ -205,11 +205,11 @@ def parse_args():
     return args
 
 data_dir = '/home/frc-ag-3/harry_ws/fruitlet_2023/nbv/debug_bag'
-# fruitlet_dict = {2: 3, 
-#                  3: 6,
-#                  5: 3,
-#                  6: 7,
-#                  7: 3}
+fruitlet_dict = {2: 3, 
+                 3: 6,
+                 5: 3,
+                 6: 7,
+                 7: 3}
 fruitlet_pairs = [((2, 3), (3, 6)),
                   ((5, 3), (3, 6))]
 
@@ -218,6 +218,15 @@ fruitlet_pairs = [((2, 3), (3, 6)),
 #                   ((2, 3), (6, 7))]
 
 # fruitlet_pairs = [((2, 3), (6, 7))]
+
+fruitlet_pairs = []
+keys = list(fruitlet_dict.keys())
+for i in range(len(keys)):
+    pair_i = (keys[i], fruitlet_dict[keys[i]])
+    for j in range(i+1, len(keys)):
+        pair_j = (keys[j], fruitlet_dict[keys[j]])
+        fruitlet_pairs.append((pair_i, pair_j))
+        
 
 if __name__ == "__main__":
     args = parse_args()
