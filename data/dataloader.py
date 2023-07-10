@@ -151,7 +151,7 @@ class FeatureDataset(Dataset):
             x0 = width // 2
             y0 = height // 2
         else:
-            raise RuntimeError('Illegal value')
+            throwRuntimeError('Illegal value')
         
         x0 = x0 + min_x
         x1 = x1 + min_x
