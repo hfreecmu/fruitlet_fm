@@ -151,7 +151,7 @@ class FeatureDataset(Dataset):
             x0 = width // 2
             y0 = height // 2
         else:
-            raise RuntimeError('Illegal value')
+            throwRuntimeError('Illegal value')
         
         x0 = x0 + min_x
         x1 = x1 + min_x
@@ -262,18 +262,18 @@ class FeatureDataset(Dataset):
             if seg_inds[:, 1].min() >= self.height:
                 valid = False
 
-        width = seg_inds[:, 0].max() - seg_inds[:, 0].min() + 1
-        height = seg_inds[:, 1].max() - seg_inds[:, 1].min() + 1
+            width = seg_inds[:, 0].max() - seg_inds[:, 0].min() + 1
+            height = seg_inds[:, 1].max() - seg_inds[:, 1].min() + 1
+
+            if width < 20:
+                valid = False
+
+            if height < 20:
+                valid = False
 
         if not valid:
             throwRuntimeError('Invalid res')
 
-        if width < 20:
-            throwRuntimeError('Too small width')
-
-        if height < 20:
-            throwRuntimeError('Too small height')
-        
         return res
 
     def __getitem__(self, idx):
@@ -511,4 +511,3 @@ def get_data_loader(images_dir, segmentations_dir,
     dloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
 
     return dloader
-

@@ -65,7 +65,7 @@ def conv(dims, strides, pools, kernel_size, padding, orig_dim):
     return nn.Sequential(*layers)
 
 class Encoder(nn.Module):
-    def __init__(self, dims, strides, pools, orig_dim, kernel_size=5, padding=2):
+    def __init__(self, dims, strides, pools, orig_dim, kernel_size=3, padding=1):
         super(Encoder, self).__init__()
     
         self.network = conv(dims, strides, pools, kernel_size, padding, orig_dim)
@@ -230,7 +230,8 @@ class TransformerAssociator(nn.Module):
                 ot_score = torch.matmul(desc_0[0], desc_1[0].T)
                 #
                 #ot_score = ot_score / 0.1
-                ot_score = ot_score / desc_0.shape[-1]**.5
+                #ot_score = ot_score / desc_0.shape[-1]**.5
+                ot_score = ot_score / desc_0.shape[-1]
                 ot_score = F.log_softmax(ot_score, dim=0) + F.log_softmax(ot_score, dim=1)
                 ot_score = ot_score.unsqueeze(0)
 
