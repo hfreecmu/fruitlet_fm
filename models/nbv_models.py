@@ -211,15 +211,6 @@ class TransformerAssociator(nn.Module):
             size_0_orig = (bgrs_0[image_ind].shape[-2], bgrs_0[image_ind].shape[-1])
             size_1_orig = (bgrs_1[image_ind].shape[-2], bgrs_1[image_ind].shape[-1])
 
-            desc_0 = desc_0.reshape((1, h_0, w_0, -1))
-            desc_1 = desc_1.reshape((1, h_1, w_1, -1))
-
-            desc_0 = torch.permute(F.interpolate(torch.permute(desc_0, (0, 3, 1, 2)), size=(size_0_orig), mode='bilinear'), (0, 2, 3, 1))
-            desc_1 = torch.permute(F.interpolate(torch.permute(desc_1, (0, 3, 1, 2)), size=(size_1_orig), mode='bilinear'), (0, 2, 3, 1))
-
-            desc_0 = desc_0.reshape((1, -1, desc_0.shape[-1]))
-            desc_1 = desc_1.reshape((1, -1, desc_1.shape[-1]))
-
             if not self.dual_softmax:
                 #used to be torch einsum thing
                 ot_score = torch.matmul(desc_0[0], desc_1[0].T).unsqueeze(0)

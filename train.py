@@ -16,6 +16,8 @@ def train(opt):
                                  opt.batch_size, opt.shuffle)
     
     ###manually change things
+    downsample_factor=2
+
     kpts_dims = [64, 64, 128, 128]
     kpts_strides = [1, 1, 1, 1]
     kpts_pools = [False, True, False, False]
@@ -111,14 +113,13 @@ def train(opt):
                 ik_1_orig = is_keypoints_1[image_ind]
                 
                 h_0, w_0 = if_0.shape
-                ik_0 = F.interpolate(ik_0_orig.unsqueeze(0).unsqueeze(0), size=(h_0, w_0), mode='bilinear').squeeze().squeeze()
+                ik_0 = F.interpolate(ik_0_orig.reshape((1, 1, ik_0.shape[-2], ik_0.shape[-1])), size=(h_0, w_0), mode='bilinear').reshape((h_0, w_0))
 
                 h_1, w_1 = if_1.shape
-                ik_1 = F.interpolate(ik_1_orig.unsqueeze(0).unsqueeze(0), size=(h_1, w_1), mode='bilinear').squeeze().squeeze()
+                ik_1 = F.interpolate(ik_1_orig.reshape((1, 1, ik_1.shape[-2], ik_1.shape[-1])), size=(h_1, w_1), mode='bilinear').reshape((h_1, w_1))
 
                 ik_0 = torch.round(ik_0)
                 ik_1 = torch.round(ik_1)
-
 
                 bce_loss_0 = bce_loss_fn(if_0.flatten(), ik_0.flatten())
                 bce_loss_1 = bce_loss_fn(if_1.flatten(), ik_1.flatten())
@@ -136,11 +137,21 @@ def train(opt):
                 matched_inds_i = torch.arange(matches_0.shape[0])[has_match_i]
                 matched_inds_j = matches_0[has_match_i]
 
-                nsi_0 = new_seg_inds_0[image_ind]
-                nsi_1 = new_seg_inds_1[image_ind]
+                nsi_0 = new_seg_inds_0[image_ind] // downsample_factor
+                nsi_1 = new_seg_inds_1[image_ind] // downsample_factor
                 
-                mnsi_0 = (nsi_0[matched_inds_i, 1] * ik_0_orig.shape[-1]) + nsi_0[matched_inds_i, 0]
-                mnsi_1 = (nsi_1[matched_inds_j, 1] * ik_1_orig.shape[-1]) + nsi_1[matched_inds_j, 0]
+                mnsi_0 = (nsi_0[matched_inds_i, 1] * w_0) + nsi_0[matched_inds_i, 0]
+                mnsi_1 = (nsi_1[matched_inds_j, 1] * w_1) + nsi_1[matched_inds_j, 0]
+
+                ###TODO need safer way to do this
+                good_0_inds = mnsi_0 < ind_scores.shape[0]
+                mnsi_0 = mnsi_0[good_0_inds]
+                mnsi_1 = mnsi_1[good_0_inds]
+
+                good_1_inds = mnsi_1 < ind_scores.shape[1]
+                mnsi_0 = mnsi_0[good_1_inds]
+                mnsi_1 = mnsi_1[good_1_inds]
+                ###
 
                 match_matrix = torch.zeros_like(ind_scores)
                 match_matrix[mnsi_0, mnsi_1] = 1.0
@@ -154,13 +165,20 @@ def train(opt):
                 unmatched_inds_i = torch.arange(matches_0.shape[0])[has_unmatched_i]
                 unmatched_inds_j = torch.arange(matches_1.shape[0])[has_unmatched_j]
 
-                umnsi_0 = (nsi_0[unmatched_inds_i, 1] * ik_0_orig.shape[-1]) + nsi_0[unmatched_inds_i, 0]
-                umnsi_1 = (nsi_1[unmatched_inds_j, 1] * ik_1_orig.shape[-1]) + nsi_1[unmatched_inds_j, 0]
+                umnsi_0 = (nsi_0[unmatched_inds_i, 1] * w_0) + nsi_0[unmatched_inds_i, 0]
+                umnsi_1 = (nsi_1[unmatched_inds_j, 1] * w_1) + nsi_1[unmatched_inds_j, 0]
+
+                ###TODO need safer way to do this
+                good_0_inds = umnsi_0 < ind_scores.shape[0]
+                umnsi_0 = umnsi_0[good_0_inds]
+
+                good_1_inds = umnsi_1 < ind_scores.shape[1]
+                umnsi_1 = umnsi_1[good_1_inds]
+                ###
                 
                 unmatched_i_matrix = torch.zeros_like(ind_scores)
                 unmatched_i_matrix[umnsi_0, ind_scores.shape[-1] - 1] = 1.0
                 unmatched_i_scores = ind_scores * unmatched_i_matrix
-
 
                 unmatched_j_matrix = torch.zeros_like(ind_scores)
                 unmatched_j_matrix[ind_scores.shape[-2] - 1, umnsi_1] = 1.0
