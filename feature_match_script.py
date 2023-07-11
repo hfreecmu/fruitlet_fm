@@ -29,24 +29,12 @@ def get_homography(src_inds, dest_inds):
 def run(data_dir, fruitlet_pairs, args):
 
     ###manually change things
-    kpts_dims = [64, 64, 128, 128, 128]
-    kpts_strides = [1, 1, 1, 1, 1]
-    kpts_pools = [False, False, True, False, False]
-
-    dims = [32, 32, 64, 64, 128]
-    strides = [1, 1, 1, 1, 1]
-    pools = [False, False, True, False, False]
-    mlp_layers = [128, 64, 1]
     max_dim = 200
     #pos_weight = torch.ones((1)).to(opt.device)
     torch.backends.cudnn.enabled = False
     ###
 
-    transformer = TransformerAssociator((dims, kpts_dims), (strides, kpts_strides),
-                                        args.transformer_layers, dims[-1], args.dim_feedforward,
-                                        mlp_layers, (pools, kpts_pools),
-                                        args.dual_softmax,
-                                        args.sinkhorn_iterations,
+    transformer = TransformerAssociator(args.transformer_layers, args.d_model, args.dim_feedforward,
                                         args.device).to(args.device)
     
     load_checkpoint(args.checkpoint_epoch, args.checkpoint_dir, transformer)
@@ -62,49 +50,31 @@ def run(data_dir, fruitlet_pairs, args):
         torch_im_0, seg_inds_0 = load_input_data(data_dir, image_ind_0, fruitlet_id_0, args)
         torch_im_1, seg_inds_1 = load_input_data(data_dir, image_ind_1, fruitlet_id_1, args)
 
-        sub_im_0, pe_0, _, x0_0, y0_0, _ = prep_feature_data(torch_im_0[0], seg_inds_0[0],
+        sub_im_0, pe_0, x0_0, y0_0, _ = prep_feature_data(torch_im_0[0], seg_inds_0[0],
                                                            None, max_dim, args.device)
-        sub_im_1, pe_1, _, x0_1, y0_1, _ = prep_feature_data(torch_im_1[0], seg_inds_1[0],
+        sub_im_1, pe_1, x0_1, y0_1, _ = prep_feature_data(torch_im_1[0], seg_inds_1[0],
                                                            None, max_dim, args.device)
                 
         x_0 = ([sub_im_0.unsqueeze(0)], [pe_0.unsqueeze(0)])
         x_1 = ([sub_im_1.unsqueeze(0)], [pe_1.unsqueeze(0)])
         with torch.no_grad():
-            scores, is_features_0, is_features_1 = transformer(x_0, x_1)
-
-        ###kpts stuff
-        if_0 = torch.sigmoid(is_features_0[0]).cpu()
-        if_1 = torch.sigmoid(is_features_1[0]).cpu()
-
-        hi_0, wi_0 = sub_im_0[0].shape[-2:]
-        hi_1, wi_1 = sub_im_1[0].shape[-2:]
-
-        if_0 = F.interpolate(if_0.unsqueeze(0).unsqueeze(0), size=(hi_0, wi_0), mode='bilinear').squeeze(0).squeeze(0)
-        if_1 = F.interpolate(if_1.unsqueeze(0).unsqueeze(0), size=(hi_1, wi_1), mode='bilinear').squeeze(0).squeeze(0)
+            scores_i, scores_j = transformer(x_0, x_1)
         
-        kpts_0 = torch.argwhere(if_0 > args.kpts_thresh)
-        kpts_1 = torch.argwhere(if_1 > args.kpts_thresh)
-
-        kpts_0[:, 0], kpts_0[:, 1] = kpts_0[:, 1] + x0_0, kpts_0[:, 0] + y0_0
-        kpts_1[:, 0], kpts_1[:, 1] = kpts_1[:, 1] + x0_1, kpts_1[:, 0] + y0_1
-
-        kpts_output_filename = str(basename) + '_kpts.png'
-        kpts_output_path = os.path.join(args.vis_dir, kpts_output_filename)
-        vis_segs(torch_im_0[0], torch_im_1[0], kpts_0, kpts_1, kpts_output_path)
-
-        ###
-
-        indices_0, indices_1, mscores_0, _ = extract_matches(scores[0].unsqueeze(0), args.match_threshold, args.use_dustbin)
+        indices_0, indices_1, mscores_0, _ = extract_matches(scores_i[0].unsqueeze(0), scores_j[0].unsqueeze(0),
+                                                             args.match_threshold)
         
         indices_0, indices_1 = indices_0.cpu().squeeze(0), indices_1.cpu().squeeze(0)
         mscores_0 = mscores_0.cpu().squeeze(0)
 
-        seg_inds_0 = seg_inds_0.squeeze()
-        seg_inds_1 = seg_inds_1.squeeze()
+        #seg_inds_0 = seg_inds_0.squeeze()
+        #seg_inds_1 = seg_inds_1.squeeze()
 
         has_match_i = (indices_0 != -1)
         matched_inds_i = torch.arange(indices_0.shape[0])[has_match_i]
         matched_inds_j = indices_0[has_match_i]
+
+        wi_0 = sub_im_0.shape[-1]
+        wi_1 = sub_im_1.shape[-1]
 
         x0s = matched_inds_i % wi_0 + x0_0
         y0s = matched_inds_i // wi_0 + y0_0
@@ -114,6 +84,8 @@ def run(data_dir, fruitlet_pairs, args):
         im_0_inds = torch.stack((x0s, y0s), dim=1)
         im_1_inds = torch.stack((x1s, y1s), dim=1)
         matching_scores = mscores_0[matched_inds_i]
+
+        breakpoint()
 
         if args.use_homography and im_0_inds.shape[0] >= 4:
             _, mask = get_homography(im_0_inds.numpy().copy(), im_1_inds.numpy().copy())
@@ -184,15 +156,13 @@ def parse_args():
     parser.add_argument('--checkpoint_epoch', type=int, required=True)
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
     parser.add_argument('--vis_dir', type=str, default='./vis/feature_match')
-    parser.add_argument('--transformer_layers', type=int, default=3)
-    parser.add_argument('--dim_feedforward', type=int, default=1024)
-    parser.add_argument('--dual_softmax', action='store_false')
-    parser.add_argument('--sinkhorn_iterations', type=int, default=15)
 
-    parser.add_argument('--match_threshold', type=float, default=0.0001)
-    parser.add_argument('--kpts_thresh', type=float, default=0.6)
+    parser.add_argument('--transformer_layers', type=int, default=3)
+    parser.add_argument('--d_model', type=int, default=256)
+    parser.add_argument('--dim_feedforward', type=int, default=1024)
+
+    parser.add_argument('--match_threshold', type=float, default=0)
     parser.add_argument('--top_n', type=int, default=100)
-    parser.add_argument('--use_dustbin', action='store_false')
     parser.add_argument('--use_homography', action='store_true')
     parser.add_argument('--use_rand_n', action='store_true')
 
@@ -219,13 +189,15 @@ fruitlet_pairs = [((2, 3), (3, 6)),
 
 # fruitlet_pairs = [((2, 3), (6, 7))]
 
-fruitlet_pairs = []
-keys = list(fruitlet_dict.keys())
-for i in range(len(keys)):
-    pair_i = (keys[i], fruitlet_dict[keys[i]])
-    for j in range(i+1, len(keys)):
-        pair_j = (keys[j], fruitlet_dict[keys[j]])
-        fruitlet_pairs.append((pair_i, pair_j))
+# fruitlet_pairs = []
+# keys = list(fruitlet_dict.keys())
+# for i in range(len(keys)):
+#     pair_i = (keys[i], fruitlet_dict[keys[i]])
+#     for j in range(i+1, len(keys)):
+#         pair_j = (keys[j], fruitlet_dict[keys[j]])
+#         fruitlet_pairs.append((pair_i, pair_j))
+
+fruitlet_pairs = [((5, 3), (3, 6))]
         
 
 if __name__ == "__main__":

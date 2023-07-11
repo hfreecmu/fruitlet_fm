@@ -245,15 +245,17 @@ def prep_feature_data(torch_im, seg_inds, matches, norm_dim, device):
 def arange_like(x, dim: int):
     return x.new_ones(x.shape[dim]).cumsum(0) - 1  # traceable in 1.1
 
-def extract_matches(scores, match_threshold, use_dustbin):
+def extract_matches(scores_i, scores_j, match_threshold):
+    use_dustbin = True
+
     if use_dustbin:
-        max0, max1 = scores[:, :-1, :-1].max(2), scores[:, :-1, :-1].max(1)
+        max0, max1 = scores_i[:, :-1, :-1].max(2), scores_j[:, :-1, :-1].max(1)
     else:
         max0, max1 = scores[:, :, :].max(2), scores[:, :, :].max(1)
     indices0, indices1 = max0.indices, max1.indices
     mutual0 = arange_like(indices0, 1)[None] == indices1.gather(1, indices0)
     mutual1 = arange_like(indices1, 1)[None] == indices0.gather(1, indices1)
-    zero = scores.new_tensor(0)
+    zero = scores_i.new_tensor(0)
     mscores0 = torch.where(mutual0, max0.values.exp(), zero)
     mscores1 = torch.where(mutual1, mscores0.gather(1, indices1), zero)
     valid0 = mutual0 & (mscores0 > match_threshold)

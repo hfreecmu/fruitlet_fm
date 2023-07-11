@@ -262,18 +262,18 @@ class FeatureDataset(Dataset):
             if seg_inds[:, 1].min() >= self.height:
                 valid = False
 
-        width = seg_inds[:, 0].max() - seg_inds[:, 0].min() + 1
-        height = seg_inds[:, 1].max() - seg_inds[:, 1].min() + 1
+            width = seg_inds[:, 0].max() - seg_inds[:, 0].min() + 1
+            height = seg_inds[:, 1].max() - seg_inds[:, 1].min() + 1
+
+            if width < 20:
+                valid = False
+
+            if height < 20:
+                valid = False
 
         if not valid:
             throwRuntimeError('Invalid res')
 
-        if width < 20:
-            throwRuntimeError('Too small width')
-
-        if height < 20:
-            throwRuntimeError('Too small height')
-        
         return res
 
     def __getitem__(self, idx):

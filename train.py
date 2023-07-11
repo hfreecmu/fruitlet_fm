@@ -31,7 +31,7 @@ def train(opt):
     bin_optimizer = optim.Adam([transformer.bin_score], opt.bin_lr)
     transformer_optimizer = optim.Adam(transformer.transformer.parameters(), opt.trans_lr)
 
-    milestones = [20000, 30000, 40000, 50000, 60000]
+    milestones = [10000, 20000, 30000, 50000, 75000]
     feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
     bin_scheduler = optim.lr_scheduler.MultiStepLR(bin_optimizer, milestones=milestones, gamma=0.5)
     transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
@@ -169,7 +169,8 @@ def train(opt):
             bin_optimizer.step()
             transformer_optimizer.step()
 
-            for step_sched in range(num_images):
+            #for step_sched in range(num_images):
+            if True:
                 feature_scheduler.step()
                 bin_scheduler.step()
                 transform_scheduler.step()
@@ -204,18 +205,18 @@ def parse_args():
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
 
     parser.add_argument('--transformer_layers', type=int, default=3)
-    parser.add_argument('--d_model', type=int, default=128)
+    parser.add_argument('--d_model', type=int, default=256)
     parser.add_argument('--dim_feedforward', type=int, default=512)
     
     parser.add_argument('--unmatch_scale', type=float, default=1.0)
 
     parser.add_argument('--shuffle', action='store_false')
     parser.add_argument('--trans_lr', type=float, default=3.5e-6)
-    parser.add_argument('--conv_lr', type=float, default=5e-4)
-    parser.add_argument('--bin_lr', type=float, default=5e-4)
+    parser.add_argument('--conv_lr', type=float, default=1e-4)
+    parser.add_argument('--bin_lr', type=float, default=1e-4)
 
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--num_steps', type=int, default=50000)
+    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--log_steps', type=int, default=50)
     parser.add_argument('--log_checkpoints', type=int, default=50)
 
