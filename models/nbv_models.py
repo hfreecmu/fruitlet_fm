@@ -167,7 +167,8 @@ class TransformerAssociator(nn.Module):
         self.sinkhorn_iterations = sinkhorn_iterations
         self.device = device
 
-        if not self.dual_softmax:
+        #if not self.dual_softmax:
+        if True:
             bin_score = torch.nn.Parameter(torch.tensor(1.))
             self.register_parameter('bin_score', bin_score)
         else:
@@ -225,17 +226,23 @@ class TransformerAssociator(nn.Module):
                 ot_score = ot_score / desc_0.shape[-1]**.5
                 ot_score = log_optimal_transport(ot_score, self.bin_score, iters=self.sinkhorn_iterations)
             else:
-                desc_0 = torch.cat((desc_0, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
-                desc_1 = torch.cat((desc_1, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
+                #desc_0 = torch.cat((desc_0, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
+                #desc_1 = torch.cat((desc_1, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
                 ot_score = torch.matmul(desc_0[0], desc_1[0].T)
                 #
                 #ot_score = ot_score / 0.1
                 #ot_score = ot_score / desc_0.shape[-1]**.5
                 ot_score = ot_score / desc_0.shape[-1]
-                ot_score = F.log_softmax(ot_score, dim=0) + F.log_softmax(ot_score, dim=1)
-                ot_score = ot_score.unsqueeze(0)
+                m, n = ot_score.shape
+                alpha = self.bin_score
+                bins0 = alpha.expand(m, 1)
+                bins1 = alpha.expand(1, n)
+                alpha = alpha.expand(1, 1)
+                couplings = torch.cat([torch.cat([ot_score, bins0], -1), torch.cat([bins1, alpha], -1)], 0)
 
-            scores.append(ot_score.squeeze(0))
+                ot_score = F.log_softmax(couplings, dim=0) + F.log_softmax(couplings, dim=1)
+
+            scores.append(ot_score)
             is_features_0.append(is_feature_0)
             is_features_1.append(is_feature_1)
 
