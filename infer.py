@@ -184,10 +184,10 @@ def parse_args():
     parser.add_argument('--vis_dir', type=str, default='./vis/infer')
     parser.add_argument('--transformer_layers', type=int, default=3)
     parser.add_argument('--dim_feedforward', type=int, default=1024)
-    parser.add_argument('--dual_softmax', action='store_false')
-    parser.add_argument('--sinkhorn_iterations', type=int, default=15)
+    parser.add_argument('--dual_softmax', action='store_true')
+    parser.add_argument('--sinkhorn_iterations', type=int, default=10)
 
-    parser.add_argument('--match_threshold', type=float, default=0.001)
+    parser.add_argument('--match_threshold', type=float, default=0.1)
     parser.add_argument('--top_n', type=int, default=100)
     parser.add_argument('--num_images', type=int, default=20)
     parser.add_argument('--use_dustbin', action='store_false')

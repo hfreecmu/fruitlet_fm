@@ -239,8 +239,8 @@ def parse_args():
     parser.add_argument('--transformer_layers', type=int, default=3)
     
     parser.add_argument('--dim_feedforward', type=int, default=1024)
-    parser.add_argument('--dual_softmax', action='store_false')
-    parser.add_argument('--sinkhorn_iterations', type=int, default=15)
+    parser.add_argument('--dual_softmax', action='store_true')
+    parser.add_argument('--sinkhorn_iterations', type=int, default=10)
     parser.add_argument('--unmatch_scale', type=float, default=0.5)
 
     parser.add_argument('--shuffle', action='store_false')
