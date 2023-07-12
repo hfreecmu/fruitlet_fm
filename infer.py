@@ -15,14 +15,16 @@ def infer(opt):
                                  1, True)
 
     ###manually change things
-    kpts_dims = [64, 64, 128, 128, 128]
-    kpts_strides = [1, 1, 1, 1, 1]
-    kpts_pools = [False, False, True, False, False]
+    downsample_factor=2
 
-    dims = [32, 32, 64, 64, 128]
-    strides = [1, 1, 1, 1, 1]
-    pools = [False, False, True, False, False]
-    mlp_layers = [128, 64, 1]
+    kpts_dims = [64, 64, 128, 128]
+    kpts_strides = [1, 1, 1, 1]
+    kpts_pools = [False, True, False, False]
+
+    dims = [32, 32, 64, 128]
+    strides = [1, 1, 1, 1]
+    pools = [False, True, False, False]
+    mlp_layers = [64, 1]
     max_dim = 200
     #pos_weight = torch.ones((1)).to(opt.device)
     torch.backends.cudnn.enabled = False
@@ -139,14 +141,13 @@ def infer(opt):
                 matched_inds_j = matched_inds_j[sorted_score_inds]
                 matching_scores = matching_scores[sorted_score_inds]
 
-
             _, width_0 = sub_ims_0[image_ind].shape[-2:]
             _, width_1 = sub_ims_1[image_ind].shape[-2:]
 
-            x0s = matched_inds_i % width_0 + x0_0
-            y0s = matched_inds_i // width_0 + y0_0
-            x1s = matched_inds_j % width_1 + x0_1
-            y1s = matched_inds_j // width_1 + y0_1
+            x0s = downsample_factor * (matched_inds_i % (width_0 // downsample_factor)) + x0_0
+            y0s = downsample_factor * (matched_inds_i // (width_0 // downsample_factor)) + y0_0
+            x1s = downsample_factor * (matched_inds_j % (width_1 // downsample_factor)) + x0_1
+            y1s = downsample_factor * (matched_inds_j // (width_1 // downsample_factor)) + y0_1
 
             im_0_inds = torch.stack((x0s, y0s), dim=1)
             im_1_inds = torch.stack((x1s, y1s), dim=1)
@@ -182,13 +183,13 @@ def parse_args():
     parser.add_argument('--checkpoint_epoch', type=int, required=True)
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
     parser.add_argument('--vis_dir', type=str, default='./vis/infer')
-    parser.add_argument('--transformer_layers', type=int, default=3)
-    parser.add_argument('--dim_feedforward', type=int, default=1024)
+    parser.add_argument('--transformer_layers', type=int, default=2)
+    parser.add_argument('--dim_feedforward', type=int, default=128)
     parser.add_argument('--dual_softmax', action='store_false')
     parser.add_argument('--sinkhorn_iterations', type=int, default=15)
 
-    parser.add_argument('--match_threshold', type=float, default=0.001)
-    parser.add_argument('--top_n', type=int, default=100)
+    parser.add_argument('--match_threshold', type=float, default=0.000)
+    parser.add_argument('--top_n', type=int, default=10)
     parser.add_argument('--num_images', type=int, default=20)
     parser.add_argument('--use_dustbin', action='store_false')
     parser.add_argument('--kpts_thresh', type=float, default=0.5)
