@@ -36,7 +36,7 @@ def train(opt):
                                         opt.sinkhorn_iterations,
                                         opt.device).to(opt.device)
     
-    load_checkpoint(2300, './checkpoints', transformer)
+    #load_checkpoint(2300, './checkpoints', transformer)
 
     ###optimizers
     feature_optimizer = optim.Adam(list(transformer.encoder.parameters()) + list(transformer.kpts_encoder.parameters()), opt.conv_lr)

@@ -90,7 +90,7 @@ def run(data_dir, fruitlet_pairs, args):
 
         kpts_output_filename = str(basename) + '_kpts.png'
         kpts_output_path = os.path.join(args.vis_dir, kpts_output_filename)
-        vis_segs(torch_im_0[0], torch_im_1[0], kpts_0, kpts_1, kpts_output_path)
+        #vis_segs(torch_im_0[0], torch_im_1[0], kpts_0, kpts_1, kpts_output_path)
 
         ###
 
@@ -130,7 +130,7 @@ def run(data_dir, fruitlet_pairs, args):
         keypoints_1 = np.stack((keypoints_1[:, 0], keypoints_1[:, 1]), axis=1)
             
         output_match_path = os.path.join(args.vis_dir, basename + '.pkl')
-        print('matched num keypoints: ', keypoints_0.shape)
+        print('matched num keypoints: ', basename, keypoints_0.shape)
         write_pickle(output_match_path, [keypoints_0, keypoints_1])
         ###
 
@@ -189,7 +189,7 @@ def parse_args():
     parser.add_argument('--dual_softmax', action='store_false')
     parser.add_argument('--sinkhorn_iterations', type=int, default=15)
 
-    parser.add_argument('--match_threshold', type=float, default=0.0001)
+    parser.add_argument('--match_threshold', type=float, default=0.000)
     parser.add_argument('--kpts_thresh', type=float, default=0.6)
     parser.add_argument('--top_n', type=int, default=20)
     parser.add_argument('--use_dustbin', action='store_false')
@@ -205,19 +205,27 @@ def parse_args():
     return args
 
 data_dir = '/home/frc-ag-3/harry_ws/fruitlet_2023/nbv/debug_bag'
-# fruitlet_dict = {2: 3, 
-#                  3: 6,
-#                  5: 3,
-#                  6: 7,
-#                  7: 3}
-fruitlet_pairs = [((2, 3), (3, 6)),
-                  ((5, 3), (3, 6))]
+fruitlet_dict = {2: 3, 
+                 3: 6,
+                 5: 3,
+                 6: 7,
+                 7: 3}
+# fruitlet_pairs = [((2, 3), (3, 6)),
+#                   ((5, 3), (3, 6))]
 
 # fruitlet_pairs = [((2, 3), (3, 6)),
 #                   ((5, 3), (3, 6)),
 #                   ((2, 3), (6, 7))]
 
 # fruitlet_pairs = [((2, 3), (6, 7))]
+
+fruitlet_pairs = []
+keys = list(fruitlet_dict.keys())
+for i in range(len(keys)):
+    pair_i = (keys[i], fruitlet_dict[keys[i]])
+    for j in range(i+1, len(keys)):
+        pair_j = (keys[j], fruitlet_dict[keys[j]])
+        fruitlet_pairs.append((pair_i, pair_j))
 
 if __name__ == "__main__":
     args = parse_args()
