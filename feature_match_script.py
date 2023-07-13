@@ -36,7 +36,6 @@ def run(data_dir, fruitlet_pairs, args):
     dims = [32, 32, 64, 64, 128]
     strides = [1, 1, 1, 1, 1]
     pools = [False, False, True, False, False]
-    mlp_layers = [128, 64, 1]
     max_dim = 200
     #pos_weight = torch.ones((1)).to(opt.device)
     torch.backends.cudnn.enabled = False
@@ -44,7 +43,7 @@ def run(data_dir, fruitlet_pairs, args):
 
     transformer = TransformerAssociator((dims, kpts_dims), (strides, kpts_strides),
                                         args.transformer_layers, dims[-1], args.dim_feedforward,
-                                        mlp_layers, (pools, kpts_pools),
+                                        (pools, kpts_pools),
                                         args.dual_softmax,
                                         args.sinkhorn_iterations,
                                         args.device).to(args.device)
@@ -70,29 +69,7 @@ def run(data_dir, fruitlet_pairs, args):
         x_0 = ([sub_im_0.unsqueeze(0)], [pe_0.unsqueeze(0)])
         x_1 = ([sub_im_1.unsqueeze(0)], [pe_1.unsqueeze(0)])
         with torch.no_grad():
-            scores, is_features_0, is_features_1 = transformer(x_0, x_1)
-
-        ###kpts stuff
-        if_0 = torch.sigmoid(is_features_0[0]).cpu()
-        if_1 = torch.sigmoid(is_features_1[0]).cpu()
-
-        hi_0, wi_0 = sub_im_0[0].shape[-2:]
-        hi_1, wi_1 = sub_im_1[0].shape[-2:]
-
-        if_0 = F.interpolate(if_0.unsqueeze(0).unsqueeze(0), size=(hi_0, wi_0), mode='bilinear').squeeze(0).squeeze(0)
-        if_1 = F.interpolate(if_1.unsqueeze(0).unsqueeze(0), size=(hi_1, wi_1), mode='bilinear').squeeze(0).squeeze(0)
-        
-        kpts_0 = torch.argwhere(if_0 > args.kpts_thresh)
-        kpts_1 = torch.argwhere(if_1 > args.kpts_thresh)
-
-        kpts_0[:, 0], kpts_0[:, 1] = kpts_0[:, 1] + x0_0, kpts_0[:, 0] + y0_0
-        kpts_1[:, 0], kpts_1[:, 1] = kpts_1[:, 1] + x0_1, kpts_1[:, 0] + y0_1
-
-        kpts_output_filename = str(basename) + '_kpts.png'
-        kpts_output_path = os.path.join(args.vis_dir, kpts_output_filename)
-        #vis_segs(torch_im_0[0], torch_im_1[0], kpts_0, kpts_1, kpts_output_path)
-
-        ###
+            scores = transformer(x_0, x_1)
 
         indices_0, indices_1, mscores_0, _ = extract_matches(scores[0].unsqueeze(0), args.match_threshold, args.use_dustbin)
         
@@ -105,6 +82,9 @@ def run(data_dir, fruitlet_pairs, args):
         has_match_i = (indices_0 != -1)
         matched_inds_i = torch.arange(indices_0.shape[0])[has_match_i]
         matched_inds_j = indices_0[has_match_i]
+
+        wi_0 = sub_im_0.shape[-1]
+        wi_1 = sub_im_1.shape[-1]
 
         x0s = matched_inds_i % wi_0 + x0_0
         y0s = matched_inds_i // wi_0 + y0_0
@@ -189,8 +169,7 @@ def parse_args():
     parser.add_argument('--dual_softmax', action='store_true')
     parser.add_argument('--sinkhorn_iterations', type=int, default=10)
 
-    parser.add_argument('--match_threshold', type=float, default=0.001)
-    parser.add_argument('--kpts_thresh', type=float, default=0.5)
+    parser.add_argument('--match_threshold', type=float, default=0.01)
     parser.add_argument('--top_n', type=int, default=50)
     parser.add_argument('--use_dustbin', action='store_false')
     parser.add_argument('--use_homography', action='store_true')

@@ -22,7 +22,6 @@ def infer(opt):
     dims = [32, 32, 64, 64, 128]
     strides = [1, 1, 1, 1, 1]
     pools = [False, False, True, False, False]
-    mlp_layers = [128, 64, 1]
     max_dim = 200
     #pos_weight = torch.ones((1)).to(opt.device)
     torch.backends.cudnn.enabled = False
@@ -30,7 +29,7 @@ def infer(opt):
 
     transformer = TransformerAssociator((dims, kpts_dims), (strides, kpts_strides),
                                         opt.transformer_layers, dims[-1], opt.dim_feedforward,
-                                        mlp_layers, (pools, kpts_pools),
+                                        (pools, kpts_pools),
                                         opt.dual_softmax,
                                         opt.sinkhorn_iterations,
                                         opt.device).to(opt.device)
@@ -51,20 +50,18 @@ def infer(opt):
 
             sub_ims_0 = []
             positional_encodings_0 = []
-            is_keypoints_0 = []
 
             sub_ims_1 = []
             positional_encodings_1 = []
-            is_keypoints_1 = []
 
             for _ in range(1):
                 np_0 = num_points_0[image_ind]
                 np_1 = num_points_1[image_ind]
 
-                sub_im_0, pe_0, ik_0, x0_0, y0_0, _ = prep_feature_data(torch_im_0[image_ind], seg_inds_pad_0[image_ind, 0:np_0], 
+                sub_im_0, pe_0, _, x0_0, y0_0, _ = prep_feature_data(torch_im_0[image_ind], seg_inds_pad_0[image_ind, 0:np_0], 
                                                    matches_pad_0[image_ind, 0:np_0],
                                              max_dim, opt.device)
-                sub_im_1, pe_1, ik_1, x0_1, y0_1, _ = prep_feature_data(torch_im_1[image_ind], seg_inds_pad_1[image_ind, 0:np_1], 
+                sub_im_1, pe_1, _, x0_1, y0_1, _ = prep_feature_data(torch_im_1[image_ind], seg_inds_pad_1[image_ind, 0:np_1], 
                                                    matches_pad_1[image_ind, 0:np_1],
                                              max_dim, opt.device)
 
@@ -72,56 +69,12 @@ def infer(opt):
                 sub_ims_1.append(sub_im_1.unsqueeze(0))
                 positional_encodings_0.append(pe_0.unsqueeze(0))
                 positional_encodings_1.append(pe_1.unsqueeze(0))
-                is_keypoints_0.append(ik_0)
-                is_keypoints_1.append(ik_1)
 
             x_0 = (sub_ims_0, positional_encodings_0)
             x_1 = (sub_ims_1, positional_encodings_1)
 
-            scores, is_features_0, is_features_1 = transformer(x_0, x_1)
+            scores = transformer(x_0, x_1)
             
-            ###kpts stuff
-            if_0 = torch.sigmoid(is_features_0[image_ind]).cpu()
-            if_1 = torch.sigmoid(is_features_1[image_ind]).cpu()
-            
-            ik_0 = is_keypoints_0[image_ind].cpu()
-            ik_1 = is_keypoints_1[image_ind].cpu()
-
-            h_0, w_0 = if_0.shape
-            h_1, w_1 = if_1.shape
-
-            h0_rat = sub_ims_0[image_ind].shape[2] / h_0
-            w0_rat = sub_ims_0[image_ind].shape[3] / w_0
-            h1_rat = sub_ims_1[image_ind].shape[2] / h_1
-            w1_rat = sub_ims_1[image_ind].shape[3] / w_1
-
-            kpts_0 = torch.argwhere(if_0 > opt.kpts_thresh)
-            kpts_1 = torch.argwhere(if_1 > opt.kpts_thresh)
-
-            kpts_0[:, 0] = torch.round(kpts_0[:, 0] * h0_rat)
-            kpts_0[:, 1] = torch.round(kpts_0[:, 1] * w0_rat)
-            kpts_1[:, 0] = torch.round(kpts_1[:, 0] * h1_rat)
-            kpts_1[:, 1] = torch.round(kpts_1[:, 1] * w1_rat)
-
-            gt_kpts_0 = torch.argwhere(ik_0 > opt.kpts_thresh)
-            gt_kpts_1 = torch.argwhere(ik_1 > opt.kpts_thresh)
-
-            #if we do batch, be careful about x0_0 not in array and others
-            kpts_0[:, 0], kpts_0[:, 1] = kpts_0[:, 1] + x0_0, kpts_0[:, 0] + y0_0
-            kpts_1[:, 0], kpts_1[:, 1] = kpts_1[:, 1] + x0_1, kpts_1[:, 0] + y0_1
-
-            gt_kpts_0[:, 0], gt_kpts_0[:, 1] = gt_kpts_0[:, 1] + x0_0, gt_kpts_0[:, 0] + y0_0
-            gt_kpts_1[:, 0], gt_kpts_1[:, 1] = gt_kpts_1[:, 1] + x0_1, gt_kpts_1[:, 0] + y0_1
-            
-            kpts_output_filename = str(image_num) + '_infer_kpts.png'
-            kpts_output_path = os.path.join(opt.vis_dir, kpts_output_filename)
-            vis_segs(torch_im_0[image_ind], torch_im_1[image_ind], kpts_0, kpts_1, kpts_output_path)
-
-            gt_kpts_output_filename = str(image_num) + '_gt_kpts.png'
-            gt_kpts_output_path = os.path.join(opt.vis_dir, gt_kpts_output_filename)
-            vis_segs(torch_im_0[image_ind], torch_im_1[image_ind], gt_kpts_0, gt_kpts_1, gt_kpts_output_path)
-            ###
-
             ###fm stuff
             indices_0, indices_1, mscores_0, _ = extract_matches(scores[image_ind].unsqueeze(0), opt.match_threshold, opt.use_dustbin)
             indices_0, indices_1 = indices_0.cpu(), indices_1.cpu()
@@ -187,11 +140,10 @@ def parse_args():
     parser.add_argument('--dual_softmax', action='store_true')
     parser.add_argument('--sinkhorn_iterations', type=int, default=10)
 
-    parser.add_argument('--match_threshold', type=float, default=0.1)
+    parser.add_argument('--match_threshold', type=float, default=0.2)
     parser.add_argument('--top_n', type=int, default=100)
     parser.add_argument('--num_images', type=int, default=20)
     parser.add_argument('--use_dustbin', action='store_false')
-    parser.add_argument('--kpts_thresh', type=float, default=0.5)
 
     parser.add_argument('--width', type=int, default=1440)
     parser.add_argument('--height', type=int, default=1080)
