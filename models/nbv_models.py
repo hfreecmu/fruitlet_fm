@@ -128,29 +128,22 @@ def alt_transformer(n_layers, d_model, dim_feedforward, nhead=8, batch_first=Tru
     return mySequential(*layers)
     
 class Transformer(nn.Module):
-    def __init__(self, n_layers, d_model, dim_feedforward, mlp_layers, batch_first=True):
+    def __init__(self, n_layers, d_model, dim_feedforward, batch_first=True):
         super(Transformer, self).__init__()
 
-        if not mlp_layers[-1] == 1:
-            raise RuntimeError('mlp layers must end with -1')
-
         self.network = alt_transformer(n_layers, d_model, dim_feedforward, batch_first)
-        self.mlp = MLP(d_model, mlp_layers)
 
     def forward(self, src0, src1):
         src0, src1 = self.network(src0, src1)
 
-        is_feature_0 = self.mlp(src0)
-        is_feature_1 = self.mlp(src1)
-        
-        return src0, src1, is_feature_0, is_feature_1
+        return src0, src1
 #####
 
 ##### Main module
 class TransformerAssociator(nn.Module):
     def __init__(self, dims, strides, 
                  n_layers, d_model, dim_feedforward,
-                 mlp_layers, pools, 
+                 pools, 
                  dual_softmax,
                  sinkhorn_iterations,
                  device):
@@ -162,7 +155,7 @@ class TransformerAssociator(nn.Module):
 
         self.kpts_encoder = Encoder(kpts_dims, kpts_strides, kpts_pools, 42)
         self.encoder = Encoder(dims, strides, pools, 3)
-        self.transformer = Transformer(n_layers, d_model, dim_feedforward, mlp_layers)
+        self.transformer = Transformer(n_layers, d_model, dim_feedforward)
         self.dual_softmax = dual_softmax
         self.sinkhorn_iterations = sinkhorn_iterations
         self.device = device
@@ -182,8 +175,6 @@ class TransformerAssociator(nn.Module):
         num_images = len(bgrs_0)
 
         scores = []
-        is_features_0 = []
-        is_features_1 = []
         for image_ind in range(num_images):
 
             #indexing these by mask_inds caused memory leak
@@ -202,10 +193,7 @@ class TransformerAssociator(nn.Module):
             src_0 = torch.permute(src_0, (0, 2, 3, 1)).reshape((1, -1, src_0.shape[1]))
             src_1 = torch.permute(src_1, (0, 2, 3, 1)).reshape((1, -1, src_1.shape[1]))
 
-            desc_0, desc_1, is_feature_0, is_feature_1 = self.transformer(src_0, src_1)
-
-            is_feature_0 = is_feature_0.reshape((h_0, w_0))
-            is_feature_1 = is_feature_1.reshape((h_1, w_1))
+            desc_0, desc_1 = self.transformer(src_0, src_1)
 
             size_0_orig = (bgrs_0[image_ind].shape[-2], bgrs_0[image_ind].shape[-1])
             size_1_orig = (bgrs_1[image_ind].shape[-2], bgrs_1[image_ind].shape[-1])
@@ -221,8 +209,11 @@ class TransformerAssociator(nn.Module):
 
             if not self.dual_softmax:
                 #used to be torch einsum thing
+                #desc_0 = desc_0 / desc_0.shape[-1]**.5
+                #desc_1 = desc_1 / desc_0.shape[-1]**.5
+
                 ot_score = torch.matmul(desc_0[0], desc_1[0].T).unsqueeze(0)
-                ot_score = ot_score / desc_0.shape[-1]**.5
+                ot_score = ot_score / desc_0.shape[-1]**.5 #this is because of variance
                 ot_score = log_optimal_transport(ot_score, self.bin_score, iters=self.sinkhorn_iterations)
             else:
                 #desc_0 = torch.cat((desc_0, self.bin_score.unsqueeze(0).unsqueeze(0)), dim=1)
@@ -243,11 +234,8 @@ class TransformerAssociator(nn.Module):
                 ot_score = ot_score.unsqueeze(0)
 
             scores.append(ot_score.squeeze(0))
-            is_features_0.append(is_feature_0)
-            is_features_1.append(is_feature_1)
 
-
-        return scores, is_features_0, is_features_1
+        return scores
     
 # def create_mask(num_points, query_mask_inds, key_mask_inds):
 #     mask = torch.zeros((num_points, num_points), dtype=torch.bool)

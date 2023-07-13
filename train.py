@@ -23,7 +23,6 @@ def train(opt):
     dims = [32, 32, 64, 64, 128]
     strides = [1, 1, 1, 1, 1]
     pools = [False, False, True, False, False]
-    mlp_layers = [128, 64, 1]
     max_dim = 200
     #pos_weight = torch.ones((1)).to(opt.device)
     torch.backends.cudnn.enabled = False
@@ -31,19 +30,19 @@ def train(opt):
 
     transformer = TransformerAssociator((dims, kpts_dims), (strides, kpts_strides),
                                         opt.transformer_layers, dims[-1], opt.dim_feedforward,
-                                        mlp_layers, (pools, kpts_pools),
+                                        (pools, kpts_pools),
                                         opt.dual_softmax,
                                         opt.sinkhorn_iterations,
                                         opt.device).to(opt.device)
     
-    #load_checkpoint(2300, './checkpoints', transformer)
+    #load_checkpoint(1100, './checkpoints', transformer)
 
     ###optimizers
     feature_optimizer = optim.Adam(list(transformer.encoder.parameters()) + list(transformer.kpts_encoder.parameters()), opt.conv_lr)
     bin_optimizer = optim.Adam([transformer.bin_score], opt.bin_lr)
     transformer_optimizer = optim.Adam(transformer.transformer.parameters(), opt.trans_lr)
 
-    milestones = [20000, 30000, 40000, 50000, 60000]
+    milestones = [10000, 20000, 30000, 40000, 50000]
     feature_scheduler = optim.lr_scheduler.MultiStepLR(feature_optimizer, milestones=milestones, gamma=0.5)
     bin_scheduler = optim.lr_scheduler.MultiStepLR(bin_optimizer, milestones=milestones, gamma=0.5)
     transform_scheduler = optim.lr_scheduler.MultiStepLR(transformer_optimizer, milestones=milestones, gamma=0.5)
@@ -68,22 +67,20 @@ def train(opt):
 
             sub_ims_0 = []
             positional_encodings_0 = []
-            is_keypoints_0 = []
             new_seg_inds_0 = []
 
             sub_ims_1 = []
             positional_encodings_1 = []
-            is_keypoints_1 = []
             new_seg_inds_1 = []
 
             for image_ind in range(num_images):
                 np_0 = num_points_0[image_ind]
                 np_1 = num_points_1[image_ind]
 
-                sub_im_0, pe_0, ik_0, _, _, nsi_0 = prep_feature_data(torch_im_0[image_ind], seg_inds_pad_0[image_ind, 0:np_0], 
+                sub_im_0, pe_0, _, _, _, nsi_0 = prep_feature_data(torch_im_0[image_ind], seg_inds_pad_0[image_ind, 0:np_0], 
                                                    matches_pad_0[image_ind, 0:np_0],
                                              max_dim, opt.device)
-                sub_im_1, pe_1, ik_1, _, _, nsi_1 = prep_feature_data(torch_im_1[image_ind], seg_inds_pad_1[image_ind, 0:np_1], 
+                sub_im_1, pe_1, _, _, _, nsi_1 = prep_feature_data(torch_im_1[image_ind], seg_inds_pad_1[image_ind, 0:np_1], 
                                                    matches_pad_1[image_ind, 0:np_1],
                                              max_dim, opt.device)
                 
@@ -91,38 +88,17 @@ def train(opt):
                 sub_ims_1.append(sub_im_1.unsqueeze(0))
                 positional_encodings_0.append(pe_0.unsqueeze(0))
                 positional_encodings_1.append(pe_1.unsqueeze(0))
-                is_keypoints_0.append(ik_0)
-                is_keypoints_1.append(ik_1)
                 new_seg_inds_0.append(nsi_0)
                 new_seg_inds_1.append(nsi_1)
 
             x_0 = (sub_ims_0, positional_encodings_0)
             x_1 = (sub_ims_1, positional_encodings_1)
 
-            scores, is_features_0, is_features_1 = transformer(x_0, x_1)
+            scores = transformer(x_0, x_1)
 
             loss = []
             #this works because masks were appended
             for image_ind in range(num_images):
-                if_0 = is_features_0[image_ind]
-                if_1 = is_features_1[image_ind]
-
-                ik_0_orig = is_keypoints_0[image_ind]
-                ik_1_orig = is_keypoints_1[image_ind]
-                
-                h_0, w_0 = if_0.shape
-                ik_0 = F.interpolate(ik_0_orig.unsqueeze(0).unsqueeze(0), size=(h_0, w_0), mode='bilinear').squeeze().squeeze()
-
-                h_1, w_1 = if_1.shape
-                ik_1 = F.interpolate(ik_1_orig.unsqueeze(0).unsqueeze(0), size=(h_1, w_1), mode='bilinear').squeeze().squeeze()
-
-                ik_0 = torch.round(ik_0)
-                ik_1 = torch.round(ik_1)
-
-
-                bce_loss_0 = bce_loss_fn(if_0.flatten(), ik_0.flatten())
-                bce_loss_1 = bce_loss_fn(if_1.flatten(), ik_1.flatten())
-                
                 ind_scores = scores[image_ind]
 
                 matches_0 = matches_pad_0[image_ind, 0:num_points_0[image_ind]]
@@ -139,8 +115,14 @@ def train(opt):
                 nsi_0 = new_seg_inds_0[image_ind]
                 nsi_1 = new_seg_inds_1[image_ind]
                 
-                mnsi_0 = (nsi_0[matched_inds_i, 1] * ik_0_orig.shape[-1]) + nsi_0[matched_inds_i, 0]
-                mnsi_1 = (nsi_1[matched_inds_j, 1] * ik_1_orig.shape[-1]) + nsi_1[matched_inds_j, 0]
+                mnsi_0 = (nsi_0[matched_inds_i, 1] * sub_ims_0[image_ind].shape[-1]) + nsi_0[matched_inds_i, 0]
+                mnsi_1 = (nsi_1[matched_inds_j, 1] * sub_ims_1[image_ind].shape[-1]) + nsi_1[matched_inds_j, 0]
+
+                if mnsi_0.shape[0] > 0 and mnsi_0.max() >= ind_scores.shape[0] -1:
+                    raise RuntimeError('How did we get here 0')
+                                                    
+                if mnsi_1.shape[0] > 0 and mnsi_1.max() >= ind_scores.shape[1] -1:
+                    raise RuntimeError('How did we get here 1')
 
                 match_matrix = torch.zeros_like(ind_scores)
                 match_matrix[mnsi_0, mnsi_1] = 1.0
@@ -154,13 +136,19 @@ def train(opt):
                 unmatched_inds_i = torch.arange(matches_0.shape[0])[has_unmatched_i]
                 unmatched_inds_j = torch.arange(matches_1.shape[0])[has_unmatched_j]
 
-                umnsi_0 = (nsi_0[unmatched_inds_i, 1] * ik_0_orig.shape[-1]) + nsi_0[unmatched_inds_i, 0]
-                umnsi_1 = (nsi_1[unmatched_inds_j, 1] * ik_1_orig.shape[-1]) + nsi_1[unmatched_inds_j, 0]
+                umnsi_0 = (nsi_0[unmatched_inds_i, 1] * sub_ims_0[image_ind].shape[-1]) + nsi_0[unmatched_inds_i, 0]
+                umnsi_1 = (nsi_1[unmatched_inds_j, 1] * sub_ims_1[image_ind].shape[-1]) + nsi_1[unmatched_inds_j, 0]
                 
+
+                if umnsi_0.shape[0] > 0 and umnsi_0.max() >= ind_scores.shape[0] - 1:
+                    raise RuntimeError("How did we get here 2")
+
+                if umnsi_1.shape[0] > 0 and umnsi_1.max() >= ind_scores.shape[1] - 1:
+                    raise RuntimeError("How did we get here 3")
+
                 unmatched_i_matrix = torch.zeros_like(ind_scores)
                 unmatched_i_matrix[umnsi_0, ind_scores.shape[-1] - 1] = 1.0
                 unmatched_i_scores = ind_scores * unmatched_i_matrix
-
 
                 unmatched_j_matrix = torch.zeros_like(ind_scores)
                 unmatched_j_matrix[ind_scores.shape[-2] - 1, umnsi_1] = 1.0
@@ -192,7 +180,7 @@ def train(opt):
 
                 total_match_loss = -(match_loss + opt.unmatch_scale*unmatch_i_loss + opt.unmatch_scale*unmatch_j_loss) / num_total
 
-                loss.append(total_match_loss + 0.5*bce_loss_0 + 0.5*bce_loss_1)
+                loss.append(total_match_loss)
 
             loss = torch.mean(torch.stack((loss)))
             feature_optimizer.zero_grad()
@@ -204,6 +192,7 @@ def train(opt):
             transformer_optimizer.step()
 
             for step_sched in range(num_images):
+            #if True:
                 feature_scheduler.step()
                 bin_scheduler.step()
                 transform_scheduler.step()
@@ -248,7 +237,7 @@ def parse_args():
     parser.add_argument('--conv_lr', type=float, default=5e-4)
     parser.add_argument('--bin_lr', type=float, default=5e-4)
 
-    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--num_steps', type=int, default=50000)
     parser.add_argument('--log_steps', type=int, default=50)
     parser.add_argument('--log_checkpoints', type=int, default=50)
